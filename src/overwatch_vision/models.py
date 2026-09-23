@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
 
@@ -44,6 +44,7 @@ class KillFeedRow:
     crop: np.ndarray
     normalized: np.ndarray
     fingerprint: np.ndarray
+    component_boxes_local: list[Rect] = field(default_factory=list)
     score: float = 0.0
 
 
@@ -65,9 +66,19 @@ class KillFeedEvent:
     track_id: int
     timestamp: float
     confidence: float
+
     killer_name: Optional[str] = None
     victim_name: Optional[str] = None
     killer_hero: Optional[str] = None
     victim_hero: Optional[str] = None
     killer_team: Optional[str] = None
     victim_team: Optional[str] = None
+
+    ability: Optional[str] = None
+    critical: Optional[bool] = None
+
+    parse_confidence: float = 0.0
+    killer_hero_confidence: float = 0.0
+    victim_hero_confidence: float = 0.0
+    killer_name_confidence: float = 0.0
+    victim_name_confidence: float = 0.0
