@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .vscode/
 .idea/
+.cache/
 logs/
 debug_frames/
 *.log
