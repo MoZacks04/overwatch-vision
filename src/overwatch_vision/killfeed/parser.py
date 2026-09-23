@@ -1,11 +1,336 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import time
+
+import cv2
+import numpy as np
+
+from overwatch_vision.killfeed.hero_recognizer import HeroRecognizer
+from overwatch_vision.models import Rect
+from overwatch_vision.ocr import OCRReader
+
+
+@dataclass(slots=True)
+class ParsedKillFeedRow:
+    killer_name: str | None = None
+    victim_name: str | None = None
+    killer_hero: str | None = None
+    victim_hero: str | None = None
+    killer_team: str | None = None
+    victim_team: str | None = None
+    ability: str | None = None
+    critical: bool | None = None
+    confidence: float = 0.0
+    killer_hero_confidence: float = 0.0
+    victim_hero_confidence: float = 0.0
+    killer_name_confidence: float = 0.0
+    victim_name_confidence: float = 0.0
+
+
 class KillFeedParser:
-    # Placeholder for hero recognition, OCR, team classification, and event-icon parsing.
-    def parse(self, row):
-        return {
-            "killer_name": None,
-            "victim_name": None,
-            "killer_hero": None,
-            "victim_hero": None,
-            "killer_team": None,
-            "victim_team": None,
-        }
+    """
+    Parse a detected row into attacker/victim details.
+
+    Normal Overwatch kill-feed rows are laid out left-to-right as attacker,
+    action/ability, victim. The colored panels tell us team affiliation and
+    also provide stable geometry for name OCR and hero portrait crops.
+    """
+
+    NAME_ALLOWLIST = (
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789_-"
+    )
+
+    def __init__(self, config: dict, ocr: OCRReader):
+        self.config = config
+        self.cfg = config.get("killfeed_parse", {})
+        self.ocr = ocr
+        self.hero_recognizer = HeroRecognizer(config)
+
+        self.save_low_confidence = bool(
+            self.cfg.get("save_low_confidence_crops", True)
+        )
+        self.low_confidence_threshold = float(
+            self.cfg.get("low_confidence_threshold", 0.58)
+        )
+
+        project_root = Path(__file__).resolve().parents[3]
+        relative = str(
+            self.cfg.get(
+                "review_directory",
+                "debug_frames/killfeed_review",
+            )
+        )
+        self.review_dir = project_root / relative
+
+    def warmup_async(self):
+        self.hero_recognizer.warmup_async()
+
+    @staticmethod
+    def _safe_crop(image: np.ndarray, rect: Rect) -> np.ndarray:
+        h, w = image.shape[:2]
+
+        x1 = max(0, min(w, rect.x1))
+        y1 = max(0, min(h, rect.y1))
+        x2 = max(0, min(w, rect.x2))
+        y2 = max(0, min(h, rect.y2))
+
+        if x2 <= x1 or y2 <= y1:
+            return np.zeros((1, 1, 3), dtype=np.uint8)
+
+        return image[y1:y2, x1:x2]
+
+    @staticmethod
+    def _clean_name(text: str | None) -> str | None:
+        if not text:
+            return None
+
+        cleaned = re.sub(
+            r"[^A-Za-z0-9_-]",
+            "",
+            text,
+        ).strip()
+
+        if len(cleaned) < 2:
+            return None
+
+        return cleaned
+
+    @staticmethod
+    def _team_from_panel(panel: np.ndarray) -> str | None:
+        if panel is None or panel.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(panel, cv2.COLOR_BGR2HSV)
+        flat = hsv.reshape(-1, 3)
+
+        keep = flat[
+            (flat[:, 1] >= 75)
+            & (flat[:, 2] >= 70)
+        ]
+
+        if keep.size == 0:
+            return None
+
+        hues = keep[:, 0].astype(np.float32)
+
+        red_fraction = float(
+            np.mean(
+                (hues <= 10)
+                | (hues >= 160)
+            )
+        )
+        blue_fraction = float(
+            np.mean(
+                (hues >= 85)
+                & (hues <= 115)
+            )
+        )
+
+        if red_fraction > blue_fraction and red_fraction >= 0.15:
+            return "red"
+
+        if blue_fraction >= red_fraction and blue_fraction >= 0.15:
+            return "blue"
+
+        return None
+
+    @staticmethod
+    def _local_components(row) -> list[Rect]:
+        boxes = list(
+            getattr(row, "component_boxes_local", [])
+            or []
+        )
+        boxes.sort(key=lambda box: box.cx)
+        return boxes
+
+    @staticmethod
+    def _party_crops(
+        row_image: np.ndarray,
+        panel_box: Rect,
+        side: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        panel = KillFeedParser._safe_crop(
+            row_image,
+            panel_box,
+        )
+
+        ph, pw = panel.shape[:2]
+        if ph <= 1 or pw <= 1:
+            empty = np.zeros((1, 1, 3), dtype=np.uint8)
+            return panel, empty, empty
+
+        icon_width = int(
+            max(
+                ph * 0.78,
+                min(ph * 1.25, pw * 0.38),
+            )
+        )
+        icon_width = max(1, min(pw, icon_width))
+
+        inset_y = max(0, int(ph * 0.08))
+        y1 = inset_y
+        y2 = max(y1 + 1, ph - inset_y)
+
+        if side == "killer":
+            hero = panel[
+                y1:y2,
+                max(0, pw - icon_width):pw,
+            ]
+            name = panel[
+                y1:y2,
+                0:max(1, pw - icon_width),
+            ]
+        else:
+            hero = panel[
+                y1:y2,
+                0:icon_width,
+            ]
+            name = panel[
+                y1:y2,
+                min(pw, icon_width):pw,
+            ]
+
+        return panel, name, hero
+
+    def _read_name(
+        self,
+        image: np.ndarray,
+    ) -> tuple[str | None, float]:
+        prepared = self.ocr.prepare_name_image(image)
+        text, confidence = self.ocr.read(
+            prepared,
+            allowlist=self.NAME_ALLOWLIST,
+        )
+        return self._clean_name(text), confidence
+
+    def _save_review_crop(
+        self,
+        row,
+        parsed: ParsedKillFeedRow,
+    ):
+        if not self.save_low_confidence:
+            return
+
+        useful_scores = [
+            parsed.killer_hero_confidence,
+            parsed.victim_hero_confidence,
+            parsed.killer_name_confidence,
+            parsed.victim_name_confidence,
+        ]
+        useful_scores = [
+            score for score in useful_scores
+            if score > 0
+        ]
+
+        average = (
+            sum(useful_scores) / len(useful_scores)
+            if useful_scores
+            else 0.0
+        )
+
+        if average >= self.low_confidence_threshold:
+            return
+
+        try:
+            self.review_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            filename = (
+                f"row_{int(time.time() * 1000)}"
+                f"_{average:.2f}.png"
+            )
+            cv2.imwrite(
+                str(self.review_dir / filename),
+                row.crop,
+            )
+        except Exception:
+            pass
+
+    def parse(self, row) -> ParsedKillFeedRow:
+        components = self._local_components(row)
+
+        if len(components) < 2:
+            return ParsedKillFeedRow(
+                confidence=0.0,
+            )
+
+        killer_box = components[0]
+        victim_box = components[-1]
+
+        killer_panel, killer_name_crop, killer_hero_crop = (
+            self._party_crops(
+                row.crop,
+                killer_box,
+                "killer",
+            )
+        )
+        victim_panel, victim_name_crop, victim_hero_crop = (
+            self._party_crops(
+                row.crop,
+                victim_box,
+                "victim",
+            )
+        )
+
+        killer_team = self._team_from_panel(killer_panel)
+        victim_team = self._team_from_panel(victim_panel)
+
+        killer_name, killer_name_conf = self._read_name(
+            killer_name_crop
+        )
+        victim_name, victim_name_conf = self._read_name(
+            victim_name_crop
+        )
+
+        killer_hero, killer_hero_conf = (
+            self.hero_recognizer.recognize(
+                killer_hero_crop
+            )
+        )
+        victim_hero, victim_hero_conf = (
+            self.hero_recognizer.recognize(
+                victim_hero_crop
+            )
+        )
+
+        confidence_values = [
+            value
+            for value in (
+                killer_name_conf,
+                victim_name_conf,
+                killer_hero_conf,
+                victim_hero_conf,
+            )
+            if value > 0
+        ]
+
+        confidence = (
+            sum(confidence_values) / len(confidence_values)
+            if confidence_values
+            else row.score
+        )
+
+        parsed = ParsedKillFeedRow(
+            killer_name=killer_name,
+            victim_name=victim_name,
+            killer_hero=killer_hero,
+            victim_hero=victim_hero,
+            killer_team=killer_team,
+            victim_team=victim_team,
+            ability=None,
+            critical=None,
+            confidence=confidence,
+            killer_hero_confidence=killer_hero_conf,
+            victim_hero_confidence=victim_hero_conf,
+            killer_name_confidence=killer_name_conf,
+            victim_name_confidence=victim_name_conf,
+        )
+
+        self._save_review_crop(row, parsed)
+        return parsed
