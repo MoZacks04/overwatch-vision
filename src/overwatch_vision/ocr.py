@@ -7,13 +7,14 @@ import numpy as np
 
 
 class OCRReader:
-    """Lazy EasyOCR wrapper shared by HUD readers."""
+    """Lazy EasyOCR wrapper used only for arbitrary player names."""
 
     def __init__(self, config: dict):
         cfg = config.get("ocr", {})
         self.enabled = bool(cfg.get("enabled", True))
         self.languages = list(cfg.get("languages", ["en"]))
         self.gpu = bool(cfg.get("gpu", False))
+        self.cpu_threads = int(cfg.get("cpu_threads", 2))
 
         self._reader = None
         self._lock = threading.Lock()
@@ -24,6 +25,10 @@ class OCRReader:
     @property
     def ready(self) -> bool:
         return self._reader is not None
+
+    @property
+    def failed(self) -> bool:
+        return self._failed
 
     def warmup_async(self):
         if (
@@ -48,6 +53,29 @@ class OCRReader:
         finally:
             self._loading = False
 
+    def _configure_cpu_threads(self):
+        if self.gpu:
+            return
+
+        try:
+            import torch
+
+            torch.set_num_threads(
+                max(1, self.cpu_threads)
+            )
+
+            try:
+                torch.set_num_interop_threads(1)
+            except RuntimeError:
+                pass
+
+            print(
+                "[ocr] CPU thread limit: "
+                f"{max(1, self.cpu_threads)}"
+            )
+        except Exception:
+            pass
+
     def _load_reader(self):
         if not self.enabled or self._failed:
             return None
@@ -60,11 +88,13 @@ class OCRReader:
                 return self._reader
 
             try:
+                self._configure_cpu_threads()
+
                 import easyocr
 
                 print(
-                    "[ocr] Loading EasyOCR. The first run may download "
-                    "model files and can take a little while..."
+                    "[ocr] Loading EasyOCR for player names only. "
+                    "The first run may download model files..."
                 )
                 self._reader = easyocr.Reader(
                     self.languages,
@@ -91,14 +121,21 @@ class OCRReader:
     @staticmethod
     def prepare_name_image(image: np.ndarray) -> np.ndarray:
         if image is None or image.size == 0:
-            return np.zeros((32, 128), dtype=np.uint8)
+            return np.zeros(
+                (32, 128),
+                dtype=np.uint8,
+            )
 
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2HSV,
+        )
         saturation = hsv[:, :, 1]
         value = hsv[:, :, 2]
 
         white_text = np.where(
-            (value >= 145) & (saturation <= 150),
+            (value >= 145)
+            & (saturation <= 150),
             255,
             0,
         ).astype(np.uint8)
@@ -118,29 +155,6 @@ class OCRReader:
             interpolation=cv2.INTER_NEAREST,
         )
 
-    @staticmethod
-    def prepare_digit_image(image: np.ndarray) -> np.ndarray:
-        if image is None or image.size == 0:
-            return np.zeros((32, 64), dtype=np.uint8)
-
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(
-            gray,
-            None,
-            fx=5.0,
-            fy=5.0,
-            interpolation=cv2.INTER_CUBIC,
-        )
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-
-        _, threshold = cv2.threshold(
-            gray,
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
-        )
-        return threshold
-
     def read(
         self,
         image: np.ndarray,
@@ -148,7 +162,12 @@ class OCRReader:
         paragraph: bool = False,
     ) -> tuple[str | None, float]:
         reader = self._get_reader()
-        if reader is None or image is None or image.size == 0:
+
+        if (
+            reader is None
+            or image is None
+            or image.size == 0
+        ):
             return None, 0.0
 
         try:
@@ -183,4 +202,7 @@ class OCRReader:
         if not pieces:
             return None, 0.0
 
-        return " ".join(pieces), sum(confidences) / len(confidences)
+        return (
+            " ".join(pieces),
+            sum(confidences) / len(confidences),
+        )
