@@ -60,40 +60,67 @@ def _event_console_text(event) -> str:
     )
 
 
+def _spoken_identity(
+    hero: str | None,
+    player_name: str | None,
+    include_player_name: bool,
+    fallback: str,
+) -> str:
+    if hero and include_player_name and player_name:
+        return f"{hero} {player_name}"
+
+    if hero:
+        return hero
+
+    if include_player_name and player_name:
+        return player_name
+
+    return fallback
+
+
 def _event_speech(
     event,
     friendly_team: str,
     speak_player_names: bool,
 ) -> str:
-    killer = _person_label(
+    # Team-side classification is currently much more trustworthy than hero
+    # recognition. Never invent a hero name just because the matcher found a
+    # weak nearest neighbour; fall back to "enemy" / "ally" language.
+    killer_is_friendly = event.killer_team == friendly_team
+    victim_is_friendly = event.victim_team == friendly_team
+
+    killer = _spoken_identity(
         event.killer_hero,
         event.killer_name,
         include_player_name=speak_player_names,
+        fallback="ally" if killer_is_friendly else "enemy",
     )
-    victim = _person_label(
+    victim = _spoken_identity(
         event.victim_hero,
         event.victim_name,
         include_player_name=speak_player_names,
+        fallback="ally" if victim_is_friendly else "enemy",
     )
 
-    if (
-        event.victim_team == friendly_team
-        and event.killer_team != friendly_team
-    ):
-        return f"Enemy {killer} eliminated your {victim}."
+    if victim_is_friendly and not killer_is_friendly:
+        if event.killer_hero and event.victim_hero:
+            return f"Enemy {killer} eliminated your {victim}."
+        if event.killer_hero:
+            return f"Enemy {killer} eliminated your ally."
+        if event.victim_hero:
+            return f"Enemy eliminated your {victim}."
+        return "Enemy eliminated your ally."
 
-    if (
-        event.killer_team == friendly_team
-        and event.victim_team != friendly_team
-    ):
-        return f"Your {killer} eliminated enemy {victim}."
+    if killer_is_friendly and not victim_is_friendly:
+        if event.killer_hero and event.victim_hero:
+            return f"Your {killer} eliminated enemy {victim}."
+        if event.killer_hero:
+            return f"Your {killer} eliminated an enemy."
+        if event.victim_hero:
+            return f"Your ally eliminated enemy {victim}."
+        return "Your ally eliminated an enemy."
 
-    if (
-        event.killer_hero
-        or event.victim_hero
-        or event.killer_name
-        or event.victim_name
-    ):
+    if event.killer_hero or event.victim_hero:
         return f"{killer} eliminated {victim}."
 
     return "Elimination detected."
