@@ -1,5 +1,4 @@
 from overwatch_vision.models import KillFeedRow, Rect
-from overwatch_vision.killfeed.parser import KillFeedParser
 from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
 from overwatch_vision.killfeed.row_normalizer import KillFeedRowNormalizer
 from overwatch_vision.killfeed.tracker import KillFeedTracker
@@ -8,7 +7,15 @@ from overwatch_vision.utils.image_ops import grayscale_fingerprint
 
 
 class KillFeedDetector:
-    def __init__(self, config, ocr):
+    """
+    Lightweight real-time kill-feed detector.
+
+    This class deliberately does not perform OCR or hero recognition. It only
+    finds rows, tracks them, and emits raw new-row events. Expensive parsing is
+    handled by AsyncKillFeedParser on a background thread.
+    """
+
+    def __init__(self, config):
         self.config = config
         kcfg = config["killfeed"]
 
@@ -18,8 +25,6 @@ class KillFeedDetector:
             height=int(kcfg["normalized_row_height"]),
         )
         self.tracker = KillFeedTracker(config)
-        self.parser = KillFeedParser(config, ocr)
-        self.parser.warmup_async()
 
         self.last_debug = {
             "mask": None,
@@ -30,6 +35,12 @@ class KillFeedDetector:
 
     def reset(self):
         self.tracker.reset()
+        self.last_debug = {
+            "mask": None,
+            "components": [],
+            "rows": [],
+            "events": [],
+        }
 
     @staticmethod
     def _component_to_local(component, row_box):
@@ -39,6 +50,12 @@ class KillFeedDetector:
             x2=max(0, component.x2 - row_box.x1),
             y2=max(0, component.y2 - row_box.y1),
         )
+
+    def get_track_row(self, track_id):
+        for track in self.tracker.tracks:
+            if track.track_id == track_id:
+                return track.row
+        return None
 
     def process(self, roi_image, roi_rect, timestamp):
         candidates, mask, components = self.row_detector.detect(
@@ -92,41 +109,6 @@ class KillFeedDetector:
             timestamp=timestamp,
             roi_height=roi_image.shape[0],
         )
-
-        tracks_by_id = {
-            track.track_id: track
-            for track in self.tracker.tracks
-        }
-
-        for event in events:
-            track = tracks_by_id.get(event.track_id)
-            if track is None:
-                continue
-
-            parsed = self.parser.parse(track.row)
-
-            event.killer_name = parsed.killer_name
-            event.victim_name = parsed.victim_name
-            event.killer_hero = parsed.killer_hero
-            event.victim_hero = parsed.victim_hero
-            event.killer_team = parsed.killer_team
-            event.victim_team = parsed.victim_team
-            event.ability = parsed.ability
-            event.critical = parsed.critical
-
-            event.parse_confidence = parsed.confidence
-            event.killer_hero_confidence = (
-                parsed.killer_hero_confidence
-            )
-            event.victim_hero_confidence = (
-                parsed.victim_hero_confidence
-            )
-            event.killer_name_confidence = (
-                parsed.killer_name_confidence
-            )
-            event.victim_name_confidence = (
-                parsed.victim_name_confidence
-            )
 
         self.last_debug = {
             "mask": mask,
