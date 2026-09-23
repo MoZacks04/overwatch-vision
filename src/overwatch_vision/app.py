@@ -9,7 +9,9 @@ import yaml
 from overwatch_vision.audio.announcer import AudioAnnouncer
 from overwatch_vision.capture import OverwatchCapture
 from overwatch_vision.debug_view import DebugView
+from overwatch_vision.killfeed.async_parser import AsyncKillFeedParser
 from overwatch_vision.killfeed.detector import KillFeedDetector
+from overwatch_vision.killfeed.parser import KillFeedParser
 from overwatch_vision.ocr import OCRReader
 from overwatch_vision.regions import HUDRegionManager
 from overwatch_vision.team_status.detector import TeamStatusDetector
@@ -103,11 +105,22 @@ def main():
     capture = OverwatchCapture(config)
     regions = HUDRegionManager(config)
 
+    # EasyOCR remains available for arbitrary player handles, but it is no
+    # longer called from the real-time capture loop.
     ocr = OCRReader(config)
     ocr.warmup_async()
 
-    killfeed = KillFeedDetector(config, ocr)
-    team_status_detector = TeamStatusDetector(config, ocr)
+    killfeed = KillFeedDetector(config)
+
+    parser = KillFeedParser(config, ocr)
+    parser_worker = AsyncKillFeedParser(
+        config,
+        parser,
+    )
+    parser_worker.start()
+
+    # Team counts now use cheap digit templates, not EasyOCR.
+    team_status_detector = TeamStatusDetector(config)
 
     debug = DebugView(config)
     audio = AudioAnnouncer(config)
@@ -125,13 +138,43 @@ def main():
         audio_cfg.get("speak_player_names", False)
     )
 
+    capture_cfg = config.get("capture", {})
     target_fps = float(
-        config["capture"].get("target_fps", 30)
+        capture_cfg.get("target_fps", 30)
     )
     target_dt = (
         1.0 / target_fps
         if target_fps > 0
         else 0.0
+    )
+
+    perf_cfg = config.get("performance", {})
+    killfeed_every_n_frames = max(
+        1,
+        int(
+            perf_cfg.get(
+                "killfeed_every_n_frames",
+                3,
+            )
+        ),
+    )
+    team_status_every_n_frames = max(
+        1,
+        int(
+            perf_cfg.get(
+                "team_status_every_n_frames",
+                15,
+            )
+        ),
+    )
+    parser_results_per_frame = max(
+        1,
+        int(
+            perf_cfg.get(
+                "parser_results_per_frame",
+                8,
+            )
+        ),
     )
 
     show_full_view = bool(
@@ -155,22 +198,32 @@ def main():
     previous_time = time.perf_counter()
     smoothed_fps = 0.0
 
+    frame_index = 0
     previous_team_status = (None, None)
+    team_status_state = team_status_detector.state
 
     print("Overwatch Vision started.")
     print("Q = quit | D = toggle debug | R = reset tracker")
+    print(
+        "[performance] capture target="
+        f"{target_fps:.0f} FPS, kill-feed check every "
+        f"{killfeed_every_n_frames} frames "
+        f"(~{target_fps / killfeed_every_n_frames:.1f} Hz), "
+        f"team-status check every {team_status_every_n_frames} frames."
+    )
     print(
         "[audio] A startup phrase has been queued. "
         "If you do not hear it, check the terminal for an audio error."
     )
     print(
-        "[vision] Hero references and OCR load in the background. "
-        "The first run can take longer."
+        "[vision] Username OCR and hero parsing run in the background. "
+        "They no longer block capture."
     )
 
     try:
         while True:
             loop_start = time.perf_counter()
+            frame_index += 1
 
             game_frame = capture.grab()
 
@@ -181,43 +234,92 @@ def main():
                 game_frame.image
             )
 
-            team_status_state = team_status_detector.process(
-                team_status_region.image,
-                game_frame.timestamp,
-            )
-
-            current_team_status = (
-                team_status_state.friendly_alive,
-                team_status_state.enemy_alive,
-            )
-
+            # Team status is intentionally sampled slowly. Its own detector
+            # also skips recognition if the tiny HUD crop has not changed.
             if (
-                current_team_status != previous_team_status
-                and any(
-                    value is not None
-                    for value in current_team_status
-                )
+                frame_index % team_status_every_n_frames
+                == 0
             ):
-                print(
-                    "[team-status] "
-                    f"friendly={current_team_status[0]} "
-                    f"enemy={current_team_status[1]} "
-                    f"confidence={team_status_state.confidence:.2f}"
+                team_status_state = (
+                    team_status_detector.process(
+                        team_status_region.image,
+                        game_frame.timestamp,
+                    )
                 )
-                previous_team_status = current_team_status
 
-            rows, events = killfeed.process(
-                roi_image=region.image,
-                roi_rect=region.rect,
-                timestamp=game_frame.timestamp,
+                current_team_status = (
+                    team_status_state.friendly_alive,
+                    team_status_state.enemy_alive,
+                )
+
+                if (
+                    current_team_status
+                    != previous_team_status
+                    and any(
+                        value is not None
+                        for value in current_team_status
+                    )
+                ):
+                    print(
+                        "[team-status] "
+                        f"friendly={current_team_status[0]} "
+                        f"enemy={current_team_status[1]} "
+                        f"confidence="
+                        f"{team_status_state.confidence:.2f}"
+                    )
+                    previous_team_status = (
+                        current_team_status
+                    )
+
+            # At 30 capture FPS and N=3 this performs kill-feed detection at
+            # roughly 10 Hz, which is fast enough to catch persistent feed
+            # rows while leaving plenty of CPU headroom.
+            if (
+                frame_index % killfeed_every_n_frames
+                == 0
+            ):
+                _, raw_events = killfeed.process(
+                    roi_image=region.image,
+                    roi_rect=region.rect,
+                    timestamp=game_frame.timestamp,
+                )
+
+                baseline_complete = (
+                    time.monotonic() - session_start
+                    >= suppress_first_seconds
+                )
+
+                for event in raw_events:
+                    if not baseline_complete:
+                        print(
+                            "[killfeed] baseline row ignored "
+                            f"track={event.track_id}"
+                        )
+                        continue
+
+                    row = killfeed.get_track_row(
+                        event.track_id
+                    )
+
+                    if row is None:
+                        print(
+                            "[killfeed] track disappeared before "
+                            f"parse queue: {event.track_id}"
+                        )
+                        continue
+
+                    parser_worker.submit(
+                        event,
+                        row,
+                    )
+
+            # Parsed results are drained without waiting. If EasyOCR takes
+            # 300 ms, capture continues while the parser thread works.
+            parsed_events = parser_worker.drain_results(
+                limit=parser_results_per_frame
             )
 
-            baseline_complete = (
-                time.monotonic() - session_start
-                >= suppress_first_seconds
-            )
-
-            for event in events:
+            for event in parsed_events:
                 console_text = _event_console_text(event)
                 print(
                     f"[killfeed] track={event.track_id} "
@@ -229,13 +331,15 @@ def main():
                     friendly_team=friendly_team,
                     speak_player_names=speak_player_names,
                 )
-                debug.notify_event(speech)
 
-                if baseline_complete:
-                    audio.announce_elimination(speech)
+                debug.notify_event(speech)
+                audio.announce_elimination(speech)
 
             now = time.perf_counter()
-            dt = max(1e-6, now - previous_time)
+            dt = max(
+                1e-6,
+                now - previous_time,
+            )
             previous_time = now
 
             instantaneous_fps = 1.0 / dt
@@ -248,6 +352,8 @@ def main():
                     + 0.10 * instantaneous_fps
                 )
 
+            parser_pending = parser_worker.pending_count
+
             if show_full_view:
                 full_preview = debug.draw_full_view(
                     frame=game_frame.image,
@@ -257,6 +363,7 @@ def main():
                     fps=smoothed_fps,
                     team_status_rect=team_status_region.rect,
                     team_status_state=team_status_state,
+                    parser_pending=parser_pending,
                 )
 
                 cv2.imshow(
@@ -270,6 +377,7 @@ def main():
                     detector_debug=killfeed.last_debug,
                     active_tracks=killfeed.tracker.tracks,
                     fps=smoothed_fps,
+                    parser_pending=parser_pending,
                 )
 
                 cv2.imshow(
@@ -297,12 +405,12 @@ def main():
                 time.sleep(remaining)
 
     finally:
+        parser_worker.stop()
         audio.stop()
+
         try:
             cv2.destroyAllWindows()
         except cv2.error:
-            # If a headless OpenCV build slips through, cleanup should not
-            # hide the original viewer error with a second traceback.
             pass
 
 
