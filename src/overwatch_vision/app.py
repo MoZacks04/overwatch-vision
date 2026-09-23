@@ -8,9 +8,11 @@ import yaml
 
 from overwatch_vision.audio.announcer import AudioAnnouncer
 from overwatch_vision.capture import OverwatchCapture
-from overwatch_vision.regions import HUDRegionManager
-from overwatch_vision.killfeed.detector import KillFeedDetector
 from overwatch_vision.debug_view import DebugView
+from overwatch_vision.killfeed.detector import KillFeedDetector
+from overwatch_vision.ocr import OCRReader
+from overwatch_vision.regions import HUDRegionManager
+from overwatch_vision.team_status.detector import TeamStatusDetector
 
 
 def _load_config():
@@ -24,16 +26,104 @@ def _load_config():
         return yaml.safe_load(handle)
 
 
+def _person_label(
+    hero: str | None,
+    player_name: str | None,
+    include_player_name: bool,
+) -> str:
+    hero_text = hero or "unknown hero"
+
+    if include_player_name and player_name:
+        return f"{hero_text} {player_name}"
+
+    return hero_text
+
+
+def _event_console_text(event) -> str:
+    killer = _person_label(
+        event.killer_hero,
+        event.killer_name,
+        include_player_name=True,
+    )
+    victim = _person_label(
+        event.victim_hero,
+        event.victim_name,
+        include_player_name=True,
+    )
+
+    return (
+        f"{killer} [{event.killer_team or '?'}] "
+        f"-> {victim} [{event.victim_team or '?'}] "
+        f"| parse={event.parse_confidence:.2f}"
+    )
+
+
+def _event_speech(
+    event,
+    friendly_team: str,
+    speak_player_names: bool,
+) -> str:
+    killer = _person_label(
+        event.killer_hero,
+        event.killer_name,
+        include_player_name=speak_player_names,
+    )
+    victim = _person_label(
+        event.victim_hero,
+        event.victim_name,
+        include_player_name=speak_player_names,
+    )
+
+    if (
+        event.victim_team == friendly_team
+        and event.killer_team != friendly_team
+    ):
+        return f"Enemy {killer} eliminated your {victim}."
+
+    if (
+        event.killer_team == friendly_team
+        and event.victim_team != friendly_team
+    ):
+        return f"Your {killer} eliminated enemy {victim}."
+
+    if (
+        event.killer_hero
+        or event.victim_hero
+        or event.killer_name
+        or event.victim_name
+    ):
+        return f"{killer} eliminated {victim}."
+
+    return "Elimination detected."
+
+
 def main():
     config = _load_config()
 
     capture = OverwatchCapture(config)
     regions = HUDRegionManager(config)
-    killfeed = KillFeedDetector(config)
+
+    ocr = OCRReader(config)
+    ocr.warmup_async()
+
+    killfeed = KillFeedDetector(config, ocr)
+    team_status_detector = TeamStatusDetector(config, ocr)
+
     debug = DebugView(config)
     audio = AudioAnnouncer(config)
-
     audio.start()
+
+    audio_cfg = config.get("audio", {})
+    if bool(audio_cfg.get("speak_startup_test", True)):
+        audio.announce("Overwatch Vision audio ready.")
+
+    parse_cfg = config.get("killfeed_parse", {})
+    friendly_team = str(
+        parse_cfg.get("friendly_team", "blue")
+    ).lower()
+    speak_player_names = bool(
+        audio_cfg.get("speak_player_names", False)
+    )
 
     target_fps = float(
         config["capture"].get("target_fps", 30)
@@ -48,26 +138,34 @@ def main():
         config["debug"].get("show_full_view", True)
     )
     show_killfeed_monitor = bool(
-        config["debug"].get("show_killfeed_monitor", True)
+        config["debug"].get(
+            "show_killfeed_monitor",
+            True,
+        )
     )
 
     suppress_first_seconds = float(
-        config.get("audio", {}).get(
+        audio_cfg.get(
             "suppress_first_seconds",
             2.0,
         )
     )
 
     session_start = time.monotonic()
-
     previous_time = time.perf_counter()
     smoothed_fps = 0.0
+
+    previous_team_status = (None, None)
 
     print("Overwatch Vision started.")
     print("Q = quit | D = toggle debug | R = reset tracker")
     print(
-        f"Audio announcements begin after "
-        f"{suppress_first_seconds:.1f}s baseline period."
+        "[audio] A startup phrase has been queued. "
+        "If you do not hear it, check the terminal for an audio error."
+    )
+    print(
+        "[vision] Hero references and OCR load in the background. "
+        "The first run can take longer."
     )
 
     try:
@@ -79,9 +177,34 @@ def main():
             region = regions.killfeed_search_region(
                 game_frame.image
             )
-            team_status = regions.team_status_region(
+            team_status_region = regions.team_status_region(
                 game_frame.image
             )
+
+            team_status_state = team_status_detector.process(
+                team_status_region.image,
+                game_frame.timestamp,
+            )
+
+            current_team_status = (
+                team_status_state.friendly_alive,
+                team_status_state.enemy_alive,
+            )
+
+            if (
+                current_team_status != previous_team_status
+                and any(
+                    value is not None
+                    for value in current_team_status
+                )
+            ):
+                print(
+                    "[team-status] "
+                    f"friendly={current_team_status[0]} "
+                    f"enemy={current_team_status[1]} "
+                    f"confidence={team_status_state.confidence:.2f}"
+                )
+                previous_team_status = current_team_status
 
             rows, events = killfeed.process(
                 roi_image=region.image,
@@ -95,19 +218,21 @@ def main():
             )
 
             for event in events:
+                console_text = _event_console_text(event)
                 print(
-                    f"[killfeed] NEW ROW "
-                    f"track={event.track_id} "
-                    f"confidence={event.confidence:.2f} "
-                    f"time={event.timestamp:.3f}"
+                    f"[killfeed] track={event.track_id} "
+                    f"{console_text}"
                 )
 
-                # Do not announce rows that were already on screen when the
-                # application was first opened.
+                speech = _event_speech(
+                    event,
+                    friendly_team=friendly_team,
+                    speak_player_names=speak_player_names,
+                )
+                debug.notify_event(speech)
+
                 if baseline_complete:
-                    announcement = "Elimination detected"
-                    debug.notify_event(announcement)
-                    audio.announce_elimination(announcement)
+                    audio.announce_elimination(speech)
 
             now = time.perf_counter()
             dt = max(1e-6, now - previous_time)
@@ -130,7 +255,8 @@ def main():
                     detector_debug=killfeed.last_debug,
                     active_tracks=killfeed.tracker.tracks,
                     fps=smoothed_fps,
-                    team_status_rect=team_status.rect,
+                    team_status_rect=team_status_region.rect,
+                    team_status_state=team_status_state,
                 )
 
                 cv2.imshow(
