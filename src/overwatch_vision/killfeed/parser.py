@@ -57,6 +57,9 @@ class KillFeedParser:
         self.low_confidence_threshold = float(
             self.cfg.get("low_confidence_threshold", 0.58)
         )
+        self.min_name_confidence = float(
+            self.cfg.get("min_name_confidence", 0.55)
+        )
 
         project_root = Path(__file__).resolve().parents[3]
         relative = str(
@@ -206,6 +209,10 @@ class KillFeedParser:
             prepared,
             allowlist=self.NAME_ALLOWLIST,
         )
+
+        if confidence < self.min_name_confidence:
+            return None, confidence
+
         return self._clean_name(text), confidence
 
     def _save_review_crop(
