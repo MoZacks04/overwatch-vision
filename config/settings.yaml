@@ -50,6 +50,9 @@ killfeed:
 killfeed_parse:
   friendly_team: "blue"
 
+  # Do not accept arbitrary OCR guesses for player handles.
+  min_name_confidence: 0.55
+
   save_low_confidence_crops: true
   low_confidence_threshold: 0.58
   review_directory: "debug_frames/killfeed_review"
@@ -84,7 +87,13 @@ hero_recognition:
   heroes_api_url: "https://overfast-api.tekrop.fr/heroes"
   cache_directory: ".cache/hero_portraits"
   refresh_hours: 24
-  min_confidence: 0.46
+
+  # Hero names are only spoken when the match is both strong and clearly
+  # better than the runner-up. False negatives are preferable to false calls.
+  min_confidence: 0.72
+  min_margin: 0.06
+  min_gray_stddev: 16.0
+  debug_rejections: true
 
 tracking:
   confirmation_frames: 3
