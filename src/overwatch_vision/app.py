@@ -298,7 +298,12 @@ def main():
 
     finally:
         audio.stop()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            # If a headless OpenCV build slips through, cleanup should not
+            # hide the original viewer error with a second traceback.
+            pass
 
 
 if __name__ == "__main__":
