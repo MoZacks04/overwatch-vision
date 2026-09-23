@@ -37,6 +37,7 @@ class DebugView:
         detector_debug,
         active_tracks,
         fps,
+        team_status_rect=None,
     ):
         output = frame.copy()
 
@@ -50,6 +51,32 @@ class DebugView:
                 (roi_rect.x2, roi_rect.y2),
                 (255, 255, 255),
                 2,
+            )
+
+        if (
+            self.show_details
+            and team_status_rect is not None
+            and self.cfg.get("draw_team_status_region", True)
+        ):
+            cv2.rectangle(
+                output,
+                (team_status_rect.x1, team_status_rect.y1),
+                (team_status_rect.x2, team_status_rect.y2),
+                (255, 255, 0),
+                2,
+            )
+            cv2.putText(
+                output,
+                "TEAM STATUS",
+                (
+                    team_status_rect.x1,
+                    max(18, team_status_rect.y1 - 5),
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (255, 255, 0),
+                1,
+                cv2.LINE_AA,
             )
 
         if self.show_details and self.cfg.get(
