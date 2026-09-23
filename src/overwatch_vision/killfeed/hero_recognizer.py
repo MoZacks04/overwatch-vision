@@ -16,8 +16,9 @@ class HeroRecognizer:
     Reference-image recognizer for kill-feed hero portraits.
 
     Reference portraits are downloaded locally from OverFast's hero list and
-    cached outside Git. Recognition compares normalized HOG + grayscale
-    descriptors, so the vision loop does not make network calls.
+    cached outside Git. Recognition compares a lightweight NumPy gradient
+    descriptor plus grayscale appearance, so it works even on OpenCV builds
+    that do not expose cv2.HOGDescriptor.
     """
 
     def __init__(self, config: dict):
@@ -50,13 +51,6 @@ class HeroRecognizer:
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
 
-        self._hog = cv2.HOGDescriptor(
-            (48, 48),
-            (16, 16),
-            (8, 8),
-            (8, 8),
-            9,
-        )
 
     def warmup_async(self):
         if not self.enabled or self._ready or self._loading:
@@ -194,7 +188,60 @@ class HeroRecognizer:
         gray = cv2.cvtColor(square, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
 
-        hog = self._hog.compute(gray).reshape(-1).astype(np.float32)
+        # Lightweight HOG-like descriptor implemented with NumPy instead of
+        # cv2.HOGDescriptor. Some Windows OpenCV installations expose the
+        # core image functions but omit HOGDescriptor, which previously made
+        # the whole application fail during startup.
+        gray_float = gray.astype(np.float32) / 255.0
+        grad_y, grad_x = np.gradient(gray_float)
+
+        magnitude = np.sqrt(
+            grad_x * grad_x + grad_y * grad_y
+        )
+        angle = (
+            np.degrees(np.arctan2(grad_y, grad_x)) + 180.0
+        ) % 180.0
+
+        cell_size = 8
+        bins = 9
+        bin_width = 180.0 / bins
+        descriptor_parts = []
+
+        for y in range(0, 48, cell_size):
+            for x in range(0, 48, cell_size):
+                cell_mag = magnitude[
+                    y:y + cell_size,
+                    x:x + cell_size,
+                ].reshape(-1)
+                cell_angle = angle[
+                    y:y + cell_size,
+                    x:x + cell_size,
+                ].reshape(-1)
+
+                hist = np.zeros(bins, dtype=np.float32)
+
+                indices = np.floor(
+                    cell_angle / bin_width
+                ).astype(np.int32)
+                indices = np.clip(
+                    indices,
+                    0,
+                    bins - 1,
+                )
+
+                for idx, weight in zip(indices, cell_mag):
+                    hist[idx] += float(weight)
+
+                hist_norm = float(np.linalg.norm(hist))
+                if hist_norm > 0:
+                    hist /= hist_norm
+
+                descriptor_parts.append(hist)
+
+        hog = np.concatenate(
+            descriptor_parts
+        ).astype(np.float32)
+
         hog_norm = float(np.linalg.norm(hog))
         if hog_norm > 0:
             hog /= hog_norm
