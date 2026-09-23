@@ -1,0 +1,56 @@
+capture:
+  window_title_contains: "Overwatch"
+  fallback_monitor_index: 1
+  target_fps: 30
+
+killfeed:
+  search_region:
+    left: 0.60
+    top: 0.025
+    right: 0.995
+    bottom: 0.30
+
+  min_component_area_fraction: 0.00002
+  max_component_area_fraction: 0.020
+  min_saturation: 75
+  min_value: 70
+
+  row_group_y_tolerance_fraction: 0.035
+  min_row_height_fraction: 0.025
+  max_row_height_fraction: 0.22
+  min_row_width_fraction: 0.10
+
+  normalized_row_width: 640
+  normalized_row_height: 72
+
+tracking:
+  confirmation_frames: 3
+  missing_frames_before_expire: 18
+  max_vertical_shift_fraction: 0.15
+  fingerprint_size: 16
+  fingerprint_match_threshold: 0.80
+
+audio:
+  enabled: true
+  phrase: "Elimination detected"
+  rate: 190
+  volume: 0.90
+
+  # Existing kill-feed entries visible when the program starts are treated
+  # as baseline state and are not spoken during this period.
+  suppress_first_seconds: 2.0
+
+debug:
+  enabled: true
+
+  # Full-game preview
+  show_full_view: true
+  full_view_scale: 0.55
+
+  # Dedicated enlarged kill-feed monitoring window
+  show_killfeed_monitor: true
+  killfeed_monitor_scale: 1.50
+
+  draw_search_region: true
+  draw_rows: true
+  show_event_banner_seconds: 1.25
