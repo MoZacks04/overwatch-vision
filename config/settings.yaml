@@ -4,17 +4,12 @@ capture:
   target_fps: 30
 
 killfeed:
-  # The kill feed sits below the small team-status counter. Starting the
-  # search slightly lower prevents the 4-v-4 status widget being mistaken
-  # for an elimination row.
   search_region:
     left: 0.60
     top: 0.060
     right: 0.995
     bottom: 0.220
 
-  # Default Overwatch team-nameplate colors. These are deliberately narrow
-  # so saturated map geometry is not treated as HUD.
   color_panels:
     red:
       hue_low_1: 168
@@ -45,14 +40,41 @@ killfeed:
   normalized_row_width: 640
   normalized_row_height: 72
 
+killfeed_parse:
+  # Default first-person Overwatch colors: blue = friendly, red = enemy.
+  friendly_team: "blue"
+
+  # Low-confidence rows are saved locally so we can improve recognition
+  # without recording the full game frame.
+  save_low_confidence_crops: true
+  low_confidence_threshold: 0.58
+  review_directory: "debug_frames/killfeed_review"
+
 team_status:
-  # Separate region for the small team-count/status widget above the feed.
-  # It is intentionally tracked separately from eliminations.
+  enabled: true
+
+  # Wider than the exact 4 VS 4 widget so HUD scale changes still fit.
   search_region:
-    left: 0.855
-    top: 0.010
-    right: 0.985
-    bottom: 0.075
+    left: 0.80
+    top: 0.005
+    right: 0.995
+    bottom: 0.085
+
+  read_interval_seconds: 0.40
+  max_players: 6
+
+ocr:
+  enabled: true
+  languages:
+    - "en"
+  gpu: false
+
+hero_recognition:
+  enabled: true
+  heroes_api_url: "https://overfast-api.tekrop.fr/heroes"
+  cache_directory: ".cache/hero_portraits"
+  refresh_hours: 24
+  min_confidence: 0.46
 
 tracking:
   confirmation_frames: 3
@@ -65,7 +87,15 @@ audio:
   enabled: true
   phrase: "Elimination detected"
   rate: 190
-  volume: 0.90
+  volume: 1.0
+
+  # Says a short phrase as soon as the app starts so audio can be verified.
+  speak_startup_test: true
+
+  # Player handles are still printed to the terminal. Set this true if you
+  # also want handles spoken aloud.
+  speak_player_names: false
+
   suppress_first_seconds: 2.0
 
 debug:
@@ -80,4 +110,4 @@ debug:
   draw_search_region: true
   draw_team_status_region: true
   draw_rows: true
-  show_event_banner_seconds: 1.25
+  show_event_banner_seconds: 2.25
