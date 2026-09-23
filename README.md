@@ -151,3 +151,22 @@ On the first run it automatically:
 Later runs reuse the existing virtual environment. The launcher still checks
 `requirements.txt` each time so newly added dependencies are installed after a
 `git pull`.
+
+
+## Performance scheduling
+
+The real-time loop is now separated from the expensive recognition work:
+
+- screen capture and the preview target 30 FPS,
+- kill-feed row detection runs every 3 captured frames (about 10 Hz),
+- team-status analysis runs every 15 captured frames (about 2 Hz),
+- the team counter uses lightweight digit templates instead of EasyOCR,
+- username OCR and hero parsing run on a background queue only when a new
+  elimination row is confirmed.
+
+This means a slow OCR call should no longer freeze screen capture or prevent a
+short-lived elimination row from being recorded. The debug windows show the
+current parse-queue length so backlog is visible while testing.
+
+These rates can be changed under `performance:` in
+`config/settings.yaml`.
