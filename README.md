@@ -85,9 +85,21 @@ Controls:
 
 ## Current milestone
 
-This version intentionally stops at row tracking. Hero recognition, username OCR,
-team-color classification, and event-icon classification are separate modules to
-add after row detection is stable.
+The project now goes beyond row tracking. For each confirmed elimination row it
+attempts to recover:
+
+- attacker and victim team color,
+- attacker and victim player names with OCR,
+- attacker and victim hero identity,
+- friendly/enemy alive counts from the small status widget above the feed.
+
+Hero recognition uses a locally cached reference set. Low-confidence rows are
+saved under `debug_frames/killfeed_review` so the recognizer can be tuned from
+real examples without recording the whole screen.
+
+Ability icons, headshot/critical markers, assists, resurrection rows, and other
+special kill-feed variants are represented in the event model but are not yet
+fully classified.
 
 
 ## Real-time viewing and audio
@@ -100,17 +112,17 @@ The application now opens two debugging windows by default:
   top-right kill-feed area. Green boxes show current row candidates and white
   boxes/IDs show confirmed temporal tracks.
 
-When a newly confirmed kill-feed row appears after the startup baseline period,
-the app:
-1. prints the event to the terminal,
-2. shows an `Elimination detected` banner in the debug views,
-3. says **"Elimination detected"** using local text-to-speech.
+When a newly confirmed elimination appears, the app prints the parsed details,
+shows the event in the debug view, and speaks a contextual phrase such as
+`Enemy Doomfist eliminated your Mercy` when hero/team parsing succeeds.
 
-Audio is intentionally generic in this milestone because hero/name parsing has
-not been implemented yet. Later, the announcer can receive parser output such as
-`Tracer eliminated Ana`.
+The app also speaks **"Overwatch Vision audio ready"** on startup so audio can
+be tested immediately. Windows SAPI is the preferred speech backend, with
+pyttsx3 as a fallback.
 
-Audio settings and viewing-window scales are in `config/settings.yaml`.
+On the first run, OCR may download its recognition model and hero references may
+be downloaded into `.cache/hero_portraits`. Audio, OCR, team status, and hero
+recognition settings are all in `config/settings.yaml`.
 
 
 ## Easiest Windows launch
@@ -136,4 +148,6 @@ On the first run it automatically:
 3. installs the packages from `requirements.txt`,
 4. starts `run.py`.
 
-Later runs reuse the existing virtual environment and launch the project directly.
+Later runs reuse the existing virtual environment. The launcher still checks
+`requirements.txt` each time so newly added dependencies are installed after a
+`git pull`.
