@@ -54,6 +54,7 @@ class DebugView:
         fps,
         team_status_rect=None,
         team_status_state=None,
+        parser_pending=0,
     ):
         output = frame.copy()
 
@@ -119,7 +120,8 @@ class DebugView:
         status = (
             f"FPS {fps:.1f} | "
             f"tracks {len(active_tracks)} | "
-            f"confirmed {confirmed}"
+            f"confirmed {confirmed} | "
+            f"parse queue {parser_pending}"
         )
 
         cv2.putText(
@@ -178,6 +180,7 @@ class DebugView:
         detector_debug,
         active_tracks,
         fps,
+        parser_pending=0,
     ):
         output = roi_image.copy()
 
@@ -244,7 +247,8 @@ class DebugView:
         status = (
             f"Kill Feed Monitor | "
             f"FPS {fps:.1f} | "
-            f"rows {len(detector_debug['rows'])}"
+            f"rows {len(detector_debug['rows'])} | "
+            f"parse {parser_pending}"
         )
 
         cv2.rectangle(
