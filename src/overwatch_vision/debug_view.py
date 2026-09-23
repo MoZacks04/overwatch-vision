@@ -23,12 +23,27 @@ class DebugView:
 
     def _event_banner_active(self):
         seconds = float(
-            self.cfg.get("show_event_banner_seconds", 1.25)
+            self.cfg.get("show_event_banner_seconds", 2.25)
         )
         return (
             self.last_event_time >= 0
             and time.monotonic() - self.last_event_time <= seconds
         )
+
+    @staticmethod
+    def _status_text(team_status_state):
+        if team_status_state is None:
+            return "TEAM STATUS: reading..."
+
+        friendly = team_status_state.friendly_alive
+        enemy = team_status_state.enemy_alive
+
+        if friendly is None and enemy is None:
+            return "TEAM STATUS: reading..."
+
+        friendly_text = "?" if friendly is None else str(friendly)
+        enemy_text = "?" if enemy is None else str(enemy)
+        return f"TEAM STATUS: {friendly_text} vs {enemy_text}"
 
     def draw_full_view(
         self,
@@ -38,6 +53,7 @@ class DebugView:
         active_tracks,
         fps,
         team_status_rect=None,
+        team_status_state=None,
     ):
         output = frame.copy()
 
@@ -65,17 +81,18 @@ class DebugView:
                 (255, 255, 0),
                 2,
             )
+
             cv2.putText(
                 output,
-                "TEAM STATUS",
+                self._status_text(team_status_state),
                 (
-                    team_status_rect.x1,
-                    max(18, team_status_rect.y1 - 5),
+                    max(10, team_status_rect.x1 - 90),
+                    max(20, team_status_rect.y2 + 22),
                 ),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
+                0.52,
                 (255, 255, 0),
-                1,
+                2,
                 cv2.LINE_AA,
             )
 
@@ -117,19 +134,24 @@ class DebugView:
         )
 
         if self._event_banner_active():
+            banner_width = min(
+                output.shape[1] - 30,
+                max(520, len(self.last_event_text) * 12),
+            )
+
             cv2.rectangle(
                 output,
                 (15, 50),
-                (385, 96),
+                (15 + banner_width, 100),
                 (20, 20, 20),
                 -1,
             )
             cv2.putText(
                 output,
-                self.last_event_text,
-                (28, 82),
+                self.last_event_text[:90],
+                (28, 83),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.85,
+                0.68,
                 (255, 255, 255),
                 2,
                 cv2.LINE_AA,
@@ -157,15 +179,13 @@ class DebugView:
         active_tracks,
         fps,
     ):
-        """
-        Dedicated enlarged view of only the kill-feed search region.
-        Bounding boxes are drawn in ROI coordinates.
-        """
         output = roi_image.copy()
 
-        # Make the upper-right region easier to inspect on dark maps.
         if output.size == 0:
-            return np.zeros((200, 500, 3), dtype=np.uint8)
+            return np.zeros(
+                (200, 500, 3),
+                dtype=np.uint8,
+            )
 
         if self.show_details and self.cfg.get(
             "draw_rows",
@@ -193,8 +213,6 @@ class DebugView:
                     cv2.LINE_AA,
                 )
 
-        # Draw confirmed tracked rows separately so we can inspect whether
-        # temporal matching is working when the feed shifts vertically.
         for track in active_tracks:
             if not track.confirmed:
                 continue
@@ -212,7 +230,10 @@ class DebugView:
             cv2.putText(
                 output,
                 f"ID {track.track_id}",
-                (max(0, box.x2 - 70), max(18, box.y2 - 4)),
+                (
+                    max(0, box.x2 - 70),
+                    max(18, box.y2 - 4),
+                ),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
                 (255, 255, 255),
@@ -246,28 +267,37 @@ class DebugView:
         )
 
         if self._event_banner_active():
-            banner_y1 = max(32, output.shape[0] - 43)
+            banner_y1 = max(
+                32,
+                output.shape[0] - 46,
+            )
             cv2.rectangle(
                 output,
                 (0, banner_y1),
-                (min(output.shape[1], 300), output.shape[0]),
+                (
+                    output.shape[1],
+                    output.shape[0],
+                ),
                 (15, 15, 15),
                 -1,
             )
 
             cv2.putText(
                 output,
-                self.last_event_text,
+                self.last_event_text[:72],
                 (9, output.shape[0] - 14),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.58,
+                0.48,
                 (255, 255, 255),
-                2,
+                1,
                 cv2.LINE_AA,
             )
 
         scale = float(
-            self.cfg.get("killfeed_monitor_scale", 1.50)
+            self.cfg.get(
+                "killfeed_monitor_scale",
+                1.50,
+            )
         )
 
         if scale != 1.0:
