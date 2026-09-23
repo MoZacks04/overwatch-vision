@@ -16,35 +16,30 @@ if errorlevel 1 (
 )
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/3] Creating virtual environment...
+    echo [1/4] Creating virtual environment...
     python -m venv .venv
     if errorlevel 1 (
         echo ERROR: Could not create the virtual environment.
         pause
         exit /b 1
     )
-
-    echo [2/3] Installing project dependencies...
-    ".venv\Scripts\python.exe" -m pip install --upgrade pip
-    if errorlevel 1 (
-        echo ERROR: pip upgrade failed.
-        pause
-        exit /b 1
-    )
-
-    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-    if errorlevel 1 (
-        echo ERROR: Dependency installation failed.
-        pause
-        exit /b 1
-    )
 ) else (
-    echo [1/3] Virtual environment found.
-    echo [2/3] Dependencies already set up.
+    echo [1/4] Virtual environment found.
 )
 
-echo [3/3] Starting Overwatch Vision...
+echo [2/4] Making sure dependencies are current...
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
+if errorlevel 1 (
+    echo ERROR: Dependency installation failed.
+    pause
+    exit /b 1
+)
+
+echo [3/4] Starting vision services...
+echo First launch note: OCR may download its recognition model.
 echo.
+
+echo [4/4] Starting Overwatch Vision...
 echo Open Overwatch before using the detector.
 echo Q = quit   D = toggle debug   R = reset tracker
 echo.
