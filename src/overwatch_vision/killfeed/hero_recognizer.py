@@ -32,7 +32,16 @@ class HeroRecognizer:
             )
         )
         self.min_confidence = float(
-            cfg.get("min_confidence", 0.46)
+            cfg.get("min_confidence", 0.72)
+        )
+        self.min_margin = float(
+            cfg.get("min_margin", 0.06)
+        )
+        self.min_gray_stddev = float(
+            cfg.get("min_gray_stddev", 16.0)
+        )
+        self.debug_rejections = bool(
+            cfg.get("debug_rejections", True)
         )
         self.refresh_hours = float(
             cfg.get("refresh_hours", 24.0)
@@ -186,6 +195,12 @@ class HeroRecognizer:
         )
 
         gray = cv2.cvtColor(square, cv2.COLOR_BGR2GRAY)
+
+        # Reject nearly flat crops. A real hero portrait contains strong
+        # structure; blank/team-color/nameplate fragments do not.
+        if float(np.std(gray)) < self.min_gray_stddev:
+            return None
+
         gray = cv2.equalizeHist(gray)
 
         # Lightweight HOG-like descriptor implemented with NumPy instead of
@@ -337,26 +352,67 @@ class HeroRecognizer:
 
         hog, gray = descriptor
 
-        best_name = None
-        best_score = -1.0
+        scored = []
 
         with self._lock:
             templates = list(self._templates.items())
 
         for name, (ref_hog, ref_gray) in templates:
-            hog_score = self._cosine(hog, ref_hog)
+            # HOG values are non-negative normalized histograms, so their
+            # cosine similarity is already naturally in the 0..1 range.
+            # The old code remapped it again into 0.5..1.0, which made
+            # unrelated crops look deceptively confident.
+            hog_score = max(
+                0.0,
+                min(1.0, self._cosine(hog, ref_hog)),
+            )
+
+            # Mean-centered grayscale vectors can have negative cosine
+            # similarity, so this one is correctly mapped to 0..1.
             gray_score = self._cosine(gray, ref_gray)
+            gray_score = max(
+                0.0,
+                min(1.0, (gray_score + 1.0) / 2.0),
+            )
 
-            hog_score = (hog_score + 1.0) / 2.0
-            gray_score = (gray_score + 1.0) / 2.0
+            score = (
+                0.78 * hog_score
+                + 0.22 * gray_score
+            )
+            scored.append((score, name))
 
-            score = 0.72 * hog_score + 0.28 * gray_score
+        if not scored:
+            return None, 0.0
 
-            if score > best_score:
-                best_score = score
-                best_name = name
+        scored.sort(reverse=True)
+        best_score, best_name = scored[0]
 
-        if best_score < self.min_confidence:
+        second_score = (
+            scored[1][0]
+            if len(scored) > 1
+            else 0.0
+        )
+        margin = best_score - second_score
+
+        accepted = (
+            best_score >= self.min_confidence
+            and margin >= self.min_margin
+        )
+
+        if not accepted:
+            if self.debug_rejections:
+                second_name = (
+                    scored[1][1]
+                    if len(scored) > 1
+                    else "none"
+                )
+                print(
+                    "[heroes] rejected uncertain crop: "
+                    f"best={best_name} {best_score:.2f}, "
+                    f"second={second_name} {second_score:.2f}, "
+                    f"margin={margin:.2f}"
+                )
+
             return None, max(0.0, best_score)
 
         return best_name, best_score
