@@ -79,6 +79,9 @@ def main():
             region = regions.killfeed_search_region(
                 game_frame.image
             )
+            team_status = regions.team_status_region(
+                game_frame.image
+            )
 
             rows, events = killfeed.process(
                 roi_image=region.image,
@@ -127,6 +130,7 @@ def main():
                     detector_debug=killfeed.last_debug,
                     active_tracks=killfeed.tracker.tracks,
                     fps=smoothed_fps,
+                    team_status_rect=team_status.rect,
                 )
 
                 cv2.imshow(
