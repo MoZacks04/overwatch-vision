@@ -3,6 +3,13 @@ capture:
   fallback_monitor_index: 1
   target_fps: 30
 
+performance:
+  # The preview/capture loop stays at 30 FPS, but expensive analysis does
+  # not need to run on every captured frame.
+  killfeed_every_n_frames: 3
+  team_status_every_n_frames: 15
+  parser_results_per_frame: 8
+
 killfeed:
   search_region:
     left: 0.60
@@ -41,11 +48,8 @@ killfeed:
   normalized_row_height: 72
 
 killfeed_parse:
-  # Default first-person Overwatch colors: blue = friendly, red = enemy.
   friendly_team: "blue"
 
-  # Low-confidence rows are saved locally so we can improve recognition
-  # without recording the full game frame.
   save_low_confidence_crops: true
   low_confidence_threshold: 0.58
   review_directory: "debug_frames/killfeed_review"
@@ -53,21 +57,27 @@ killfeed_parse:
 team_status:
   enabled: true
 
-  # Wider than the exact 4 VS 4 widget so HUD scale changes still fit.
   search_region:
     left: 0.80
     top: 0.005
     right: 0.995
     bottom: 0.085
 
-  read_interval_seconds: 0.40
   max_players: 6
+
+  # The digit matcher only reruns when this small HUD crop actually changes.
+  change_threshold: 0.020
+  min_confidence: 0.30
 
 ocr:
   enabled: true
   languages:
     - "en"
   gpu: false
+
+  # EasyOCR is only used for player names. Limiting PyTorch threads stops
+  # occasional OCR jobs from monopolizing the CPU.
+  cpu_threads: 2
 
 hero_recognition:
   enabled: true
@@ -88,14 +98,8 @@ audio:
   phrase: "Elimination detected"
   rate: 190
   volume: 1.0
-
-  # Says a short phrase as soon as the app starts so audio can be verified.
   speak_startup_test: true
-
-  # Player handles are still printed to the terminal. Set this true if you
-  # also want handles spoken aloud.
   speak_player_names: false
-
   suppress_first_seconds: 2.0
 
 debug:
