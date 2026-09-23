@@ -111,3 +111,29 @@ not been implemented yet. Later, the announcer can receive parser output such as
 `Tracer eliminated Ana`.
 
 Audio settings and viewing-window scales are in `config/settings.yaml`.
+
+
+## Easiest Windows launch
+
+On Windows, you can now use the included launcher instead of manually creating
+and activating a virtual environment.
+
+After pulling the latest repository, either double-click:
+
+```text
+start_windows.bat
+```
+
+or run it from the VS Code terminal:
+
+```powershell
+.\start_windows.bat
+```
+
+On the first run it automatically:
+1. checks that Python is installed,
+2. creates `.venv`,
+3. installs the packages from `requirements.txt`,
+4. starts `run.py`.
+
+Later runs reuse the existing virtual environment and launch the project directly.
