@@ -14,37 +14,93 @@ class RowCandidate:
 
 
 class KillFeedRowDetector:
+    """
+    Detect kill-feed rows from the colored Overwatch nameplates.
+
+    The previous detector used a generic "high saturation" mask. That worked
+    for HUD elements, but it also reacted strongly to colorful map geometry
+    and to the team-status widget. Kill-feed rows are much more structured:
+    each normal elimination row contains two filled, horizontal team-colored
+    nameplates. We detect those panels first, then group panels that share a
+    vertical center into a row.
+    """
+
     def __init__(self, config):
         self.cfg = config["killfeed"]
 
-    def _hud_mask(self, roi):
+    def _panel_mask(self, roi):
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        colors = self.cfg["color_panels"]
 
-        min_s = int(self.cfg["min_saturation"])
-        min_v = int(self.cfg["min_value"])
-
-        mask = cv2.inRange(
+        red = colors["red"]
+        red_a = cv2.inRange(
             hsv,
-            np.array([0, min_s, min_v], dtype=np.uint8),
-            np.array([179, 255, 255], dtype=np.uint8),
+            np.array(
+                [
+                    int(red["hue_low_1"]),
+                    int(red["min_saturation"]),
+                    int(red["min_value"]),
+                ],
+                dtype=np.uint8,
+            ),
+            np.array(
+                [
+                    int(red["hue_high_1"]),
+                    255,
+                    255,
+                ],
+                dtype=np.uint8,
+            ),
+        )
+        red_b = cv2.inRange(
+            hsv,
+            np.array(
+                [
+                    int(red["hue_low_2"]),
+                    int(red["min_saturation"]),
+                    int(red["min_value"]),
+                ],
+                dtype=np.uint8,
+            ),
+            np.array(
+                [
+                    int(red["hue_high_2"]),
+                    255,
+                    255,
+                ],
+                dtype=np.uint8,
+            ),
         )
 
-        kernel_open = np.ones((2, 2), np.uint8)
-        kernel_close = np.ones((5, 3), np.uint8)
+        blue = colors["blue"]
+        blue_mask = cv2.inRange(
+            hsv,
+            np.array(
+                [
+                    int(blue["hue_low"]),
+                    int(blue["min_saturation"]),
+                    int(blue["min_value"]),
+                ],
+                dtype=np.uint8,
+            ),
+            np.array(
+                [
+                    int(blue["hue_high"]),
+                    255,
+                    255,
+                ],
+                dtype=np.uint8,
+            ),
+        )
 
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+        return cv2.bitwise_or(
+            cv2.bitwise_or(red_a, red_b),
+            blue_mask,
+        )
 
-        return mask
-
-    def detect(self, roi):
-        if roi.size == 0:
-            return [], np.zeros((1, 1), dtype=np.uint8), []
-
-        h, w = roi.shape[:2]
+    def _find_panel_components(self, mask):
+        h, w = mask.shape[:2]
         roi_area = float(h * w)
-
-        mask = self._hud_mask(roi)
 
         contours, _ = cv2.findContours(
             mask,
@@ -52,27 +108,66 @@ class KillFeedRowDetector:
             cv2.CHAIN_APPROX_SIMPLE,
         )
 
-        min_area = roi_area * float(self.cfg["min_component_area_fraction"])
-        max_area = roi_area * float(self.cfg["max_component_area_fraction"])
+        min_area = roi_area * float(
+            self.cfg["min_panel_area_fraction"]
+        )
+        max_area = roi_area * float(
+            self.cfg["max_panel_area_fraction"]
+        )
+        min_w = w * float(
+            self.cfg["min_panel_width_fraction"]
+        )
+        min_h = h * float(
+            self.cfg["min_panel_height_fraction"]
+        )
+        max_h = h * float(
+            self.cfg["max_panel_height_fraction"]
+        )
+        min_aspect = float(
+            self.cfg["min_panel_aspect_ratio"]
+        )
+        min_fill = float(
+            self.cfg["min_panel_fill_ratio"]
+        )
 
         components = []
 
         for contour in contours:
-            area = cv2.contourArea(contour)
+            area = float(cv2.contourArea(contour))
 
             if not (min_area <= area <= max_area):
                 continue
 
             x, y, bw, bh = cv2.boundingRect(contour)
 
-            if bw < 4 or bh < 4:
+            if bw < min_w or not (min_h <= bh <= max_h):
                 continue
 
-            components.append(Rect(x, y, x + bw, y + bh))
+            aspect = bw / max(1.0, float(bh))
+            if aspect < min_aspect:
+                continue
+
+            fill_ratio = area / max(1.0, float(bw * bh))
+            if fill_ratio < min_fill:
+                continue
+
+            components.append(
+                Rect(
+                    x1=x,
+                    y1=y,
+                    x2=x + bw,
+                    y2=y + bh,
+                )
+            )
 
         components.sort(key=lambda r: r.cy)
+        return components
 
-        tolerance = h * float(self.cfg["row_group_y_tolerance_fraction"])
+    def _group_components(self, components, roi_height):
+        tolerance = roi_height * float(
+            self.cfg["row_group_y_tolerance_fraction"]
+        )
+
         groups = []
 
         for component in components:
@@ -92,20 +187,41 @@ class KillFeedRowDetector:
             else:
                 best_group.append(component)
 
+        return groups
+
+    def detect(self, roi):
+        if roi.size == 0:
+            return [], np.zeros((1, 1), dtype=np.uint8), []
+
+        h, w = roi.shape[:2]
+
+        mask = self._panel_mask(roi)
+        components = self._find_panel_components(mask)
+        groups = self._group_components(components, h)
+
         candidates = []
 
-        min_h = h * float(self.cfg["min_row_height_fraction"])
-        max_h = h * float(self.cfg["max_row_height_fraction"])
-        min_w = w * float(self.cfg["min_row_width_fraction"])
+        min_components = int(
+            self.cfg.get("min_components_per_row", 2)
+        )
+        min_row_width = w * float(
+            self.cfg["min_row_width_fraction"]
+        )
+        max_right_gap = w * float(
+            self.cfg["max_right_gap_fraction"]
+        )
 
         for group in groups:
+            if len(group) < min_components:
+                continue
+
             x1 = min(r.x1 for r in group)
             y1 = min(r.y1 for r in group)
             x2 = max(r.x2 for r in group)
             y2 = max(r.y2 for r in group)
 
-            pad_x = max(3, int(0.01 * w))
-            pad_y = max(2, int(0.01 * h))
+            pad_x = max(4, int(0.015 * w))
+            pad_y = max(2, int(0.025 * h))
 
             row = Rect(
                 max(0, x1 - pad_x),
@@ -114,29 +230,41 @@ class KillFeedRowDetector:
                 min(h, y2 + pad_y),
             )
 
-            if not (min_h <= row.height <= max_h):
+            if row.width < min_row_width:
                 continue
 
-            if row.width < min_w:
+            right_gap = w - row.x2
+            if right_gap > max_right_gap:
                 continue
 
             right_anchor_score = 1.0 - min(
                 1.0,
-                max(0.0, (w - row.x2) / max(1.0, w * 0.30)),
+                right_gap / max(1.0, max_right_gap),
             )
 
-            component_score = min(1.0, len(group) / 4.0)
+            width_score = min(
+                1.0,
+                row.width / max(1.0, w * 0.45),
+            )
 
-            score = 0.65 * right_anchor_score + 0.35 * component_score
+            component_score = min(
+                1.0,
+                len(group) / 2.0,
+            )
 
-            if score >= 0.40:
-                candidates.append(
-                    RowCandidate(
-                        bbox=row,
-                        component_boxes=group,
-                        score=score,
-                    )
+            score = (
+                0.45 * right_anchor_score
+                + 0.30 * width_score
+                + 0.25 * component_score
+            )
+
+            candidates.append(
+                RowCandidate(
+                    bbox=row,
+                    component_boxes=group,
+                    score=score,
                 )
+            )
 
         candidates.sort(key=lambda c: c.bbox.y1)
 
