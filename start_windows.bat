@@ -16,7 +16,7 @@ if errorlevel 1 (
 )
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/4] Creating virtual environment...
+    echo [1/5] Creating virtual environment...
     python -m venv .venv
     if errorlevel 1 (
         echo ERROR: Could not create the virtual environment.
@@ -24,10 +24,10 @@ if not exist ".venv\Scripts\python.exe" (
         exit /b 1
     )
 ) else (
-    echo [1/4] Virtual environment found.
+    echo [1/5] Virtual environment found.
 )
 
-echo [2/4] Making sure dependencies are current...
+echo [2/5] Making sure dependencies are current...
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 (
     echo ERROR: Dependency installation failed.
@@ -35,11 +35,33 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] Starting vision services...
+echo [3/5] Checking OpenCV window support...
+".venv\Scripts\python.exe" -c "import cv2,re,sys; b=cv2.getBuildInformation(); sys.exit(0 if re.search(r'GUI:\s+(WIN32|QT|GTK|COCOA)', b, re.I) else 1)"
+if errorlevel 1 (
+    echo OpenCV GUI support is missing. Repairing the Windows OpenCV build...
+    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --force-reinstall --no-deps opencv-python==4.10.0.84
+    if errorlevel 1 (
+        echo ERROR: Could not repair OpenCV GUI support.
+        pause
+        exit /b 1
+    )
+
+    ".venv\Scripts\python.exe" -c "import cv2,re,sys; b=cv2.getBuildInformation(); sys.exit(0 if re.search(r'GUI:\s+(WIN32|QT|GTK|COCOA)', b, re.I) else 1)"
+    if errorlevel 1 (
+        echo ERROR: OpenCV still does not have window support after repair.
+        echo Try deleting the .venv folder and running this launcher again.
+        pause
+        exit /b 1
+    )
+) else (
+    echo OpenCV GUI support is available.
+)
+
+echo [4/5] Starting vision services...
 echo First launch note: OCR may download its recognition model.
 echo.
 
-echo [4/4] Starting Overwatch Vision...
+echo [5/5] Starting Overwatch Vision...
 echo Open Overwatch before using the detector.
 echo Q = quit   D = toggle debug   R = reset tracker
 echo.
