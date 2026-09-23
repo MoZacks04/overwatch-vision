@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 
+import cv2
 import numpy as np
 
-from overwatch_vision.ocr import OCRReader
+from overwatch_vision.team_status.digit_recognizer import (
+    DigitTemplateRecognizer,
+)
 
 
 @dataclass(slots=True)
@@ -17,41 +19,81 @@ class TeamStatusState:
 
 
 class TeamStatusDetector:
-    def __init__(self, config: dict, ocr: OCRReader):
+    """
+    Cheap team-count reader.
+
+    This no longer uses EasyOCR. The HUD crop is fingerprinted first and only
+    re-read when it changes enough. Digits are recognized with lightweight
+    OpenCV template matching.
+    """
+
+    def __init__(self, config: dict):
         cfg = config.get("team_status", {})
+
         self.enabled = bool(cfg.get("enabled", True))
-        self.interval_seconds = float(
-            cfg.get("read_interval_seconds", 0.40)
-        )
         self.max_players = int(cfg.get("max_players", 6))
-        self.ocr = ocr
+        self.change_threshold = float(
+            cfg.get("change_threshold", 0.020)
+        )
+        self.min_confidence = float(
+            cfg.get("min_confidence", 0.30)
+        )
+
+        self.recognizer = DigitTemplateRecognizer(
+            max_digit=self.max_players
+        )
 
         self.state = TeamStatusState()
-        self._last_read = -1.0
+        self._last_signature = None
 
     @staticmethod
-    def _first_number(text: str | None) -> int | None:
-        if not text:
-            return None
-
-        match = re.search(r"\d+", text)
-        if not match:
-            return None
-
-        try:
-            return int(match.group(0))
-        except ValueError:
-            return None
-
-    def _read_side(self, image: np.ndarray) -> tuple[int | None, float]:
-        prepared = self.ocr.prepare_digit_image(image)
-        text, confidence = self.ocr.read(
-            prepared,
-            allowlist="0123456789",
+    def _signature(image: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY,
         )
-        value = self._first_number(text)
+        small = cv2.resize(
+            gray,
+            (64, 24),
+            interpolation=cv2.INTER_AREA,
+        )
+        return small.astype(np.float32) / 255.0
 
-        if value is not None and not (0 <= value <= self.max_players):
+    def _changed_enough(self, image: np.ndarray) -> bool:
+        signature = self._signature(image)
+
+        if self._last_signature is None:
+            self._last_signature = signature
+            return True
+
+        difference = float(
+            np.mean(
+                np.abs(
+                    signature - self._last_signature
+                )
+            )
+        )
+
+        if difference >= self.change_threshold:
+            self._last_signature = signature
+            return True
+
+        return False
+
+    def _read_side(
+        self,
+        image: np.ndarray,
+    ) -> tuple[int | None, float]:
+        value, confidence = self.recognizer.recognize(
+            image
+        )
+
+        if confidence < self.min_confidence:
+            return None, confidence
+
+        if value is not None and not (
+            0 <= value <= self.max_players
+        ):
             return None, 0.0
 
         return value, confidence
@@ -64,38 +106,47 @@ class TeamStatusDetector:
         if not self.enabled:
             return self.state
 
-        if (
-            self._last_read >= 0
-            and timestamp - self._last_read < self.interval_seconds
-        ):
-            return self.state
-
-        self._last_read = timestamp
-
         if image is None or image.size == 0:
             return self.state
 
+        if (
+            self.state.timestamp > 0
+            and not self._changed_enough(image)
+        ):
+            return self.state
+
+        if self.state.timestamp <= 0:
+            self._last_signature = self._signature(image)
+
         _, w = image.shape[:2]
 
-        left = image[:, : max(1, int(w * 0.43))]
-        right = image[:, int(w * 0.57):]
+        left = image[
+            :,
+            :max(1, int(w * 0.45)),
+        ]
+        right = image[
+            :,
+            int(w * 0.55):,
+        ]
 
-        friendly, friendly_conf = self._read_side(left)
-        enemy, enemy_conf = self._read_side(right)
+        friendly, friendly_conf = self._read_side(
+            left
+        )
+        enemy, enemy_conf = self._read_side(
+            right
+        )
 
         if friendly is None and enemy is None:
             return self.state
 
-        confidence_values = [
+        scores = [
             value
-            for value in (friendly_conf, enemy_conf)
+            for value in (
+                friendly_conf,
+                enemy_conf,
+            )
             if value > 0
         ]
-        confidence = (
-            sum(confidence_values) / len(confidence_values)
-            if confidence_values
-            else 0.0
-        )
 
         if friendly is not None:
             self.state.friendly_alive = friendly
@@ -103,6 +154,11 @@ class TeamStatusDetector:
         if enemy is not None:
             self.state.enemy_alive = enemy
 
-        self.state.confidence = confidence
+        self.state.confidence = (
+            sum(scores) / len(scores)
+            if scores
+            else 0.0
+        )
         self.state.timestamp = timestamp
+
         return self.state
