@@ -37,6 +37,10 @@ class KillFeedTracker:
         self.dedupe_similarity = float(
             cfg.get("dedupe_similarity", 0.90)
         )
+        self.history_frames = max(
+            1,
+            int(cfg.get("history_frames", 6)),
+        )
 
         self.tracks = []
         self.next_track_id = 1
@@ -134,6 +138,12 @@ class KillFeedTracker:
 
             track = self.tracks[ti]
             track.row = rows[ri]
+            track.row_history.append(rows[ri])
+            if len(track.row_history) > self.history_frames:
+                track.row_history = track.row_history[
+                    -self.history_frames:
+                ]
+
             track.last_seen = timestamp
             track.age_frames += 1
             track.missing_frames = 0
@@ -186,6 +196,7 @@ class KillFeedTracker:
                     row=rows[ri],
                     first_seen=timestamp,
                     last_seen=timestamp,
+                    row_history=[rows[ri]],
                 )
             )
             self.next_track_id += 1
