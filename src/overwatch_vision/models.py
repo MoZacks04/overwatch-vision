@@ -73,6 +73,7 @@ class KillFeedTrack:
     missing_frames: int = 0
     confirmed: bool = False
     emitted: bool = False
+    row_history: list[KillFeedRow] = field(default_factory=list)
 
 
 @dataclass(slots=True)
