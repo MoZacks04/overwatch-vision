@@ -110,6 +110,12 @@ hero_recognition:
   min_gray_stddev: 16.0
   debug_rejections: true
 
+  # Exact in-game kill-feed crops labeled with label_hero_samples.py are
+  # preferred over the generic downloaded portrait references.
+  local_template_directory: ".cache/killfeed_hero_templates"
+  local_min_confidence: 0.76
+  local_min_margin: 0.05
+
 tracking:
   confirmation_frames: 3
   missing_frames_before_expire: 18
