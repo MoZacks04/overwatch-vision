@@ -46,6 +46,12 @@ class HeroRecognizer:
         self.refresh_hours = float(
             cfg.get("refresh_hours", 24.0)
         )
+        self.local_min_confidence = float(
+            cfg.get("local_min_confidence", 0.76)
+        )
+        self.local_min_margin = float(
+            cfg.get("local_min_margin", 0.05)
+        )
 
         project_root = Path(__file__).resolve().parents[3]
         cache_relative = str(
@@ -54,7 +60,19 @@ class HeroRecognizer:
         self.cache_dir = project_root / cache_relative
         self.manifest_path = self.cache_dir / "heroes.json"
 
+        local_relative = str(
+            cfg.get(
+                "local_template_directory",
+                ".cache/killfeed_hero_templates",
+            )
+        )
+        self.local_template_dir = project_root / local_relative
+
         self._templates: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._local_templates: dict[
+            str,
+            list[tuple[np.ndarray, np.ndarray]],
+        ] = {}
         self._ready = False
         self._loading = False
         self._lock = threading.Lock()
@@ -301,6 +319,36 @@ class HeroRecognizer:
             self._templates = templates
             self._ready = bool(templates)
 
+    def _load_local_templates(self):
+        local_templates = {}
+
+        if not self.local_template_dir.exists():
+            with self._lock:
+                self._local_templates = {}
+            return
+
+        for hero_dir in self.local_template_dir.iterdir():
+            if not hero_dir.is_dir():
+                continue
+
+            descriptors = []
+
+            for path in hero_dir.glob("*.png"):
+                image = cv2.imread(
+                    str(path),
+                    cv2.IMREAD_UNCHANGED,
+                )
+                descriptor = self._descriptor(image)
+
+                if descriptor is not None:
+                    descriptors.append(descriptor)
+
+            if descriptors:
+                local_templates[hero_dir.name] = descriptors
+
+        with self._lock:
+            self._local_templates = local_templates
+
     def _load_or_refresh(self):
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -316,6 +364,18 @@ class HeroRecognizer:
                     )
 
             self._load_templates_from_cache()
+            self._load_local_templates()
+
+            local_count = sum(
+                len(items)
+                for items in self._local_templates.values()
+            )
+
+            if local_count:
+                print(
+                    f"[heroes] {local_count} labeled in-game "
+                    "kill-feed templates ready."
+                )
 
             if self._ready:
                 print(
@@ -351,6 +411,71 @@ class HeroRecognizer:
             return None, 0.0
 
         hog, gray = descriptor
+
+        # Prefer labeled in-game kill-feed crops when available. These match
+        # the exact HUD art and framing better than generic portrait assets.
+        with self._lock:
+            local_templates = {
+                name: list(items)
+                for name, items
+                in self._local_templates.items()
+            }
+
+        if local_templates:
+            local_scored = []
+
+            for name, descriptors in local_templates.items():
+                hero_best = -1.0
+
+                for ref_hog, ref_gray in descriptors:
+                    hog_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            self._cosine(hog, ref_hog),
+                        ),
+                    )
+
+                    gray_score = self._cosine(
+                        gray,
+                        ref_gray,
+                    )
+                    gray_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            (gray_score + 1.0) / 2.0,
+                        ),
+                    )
+
+                    score = (
+                        0.82 * hog_score
+                        + 0.18 * gray_score
+                    )
+                    hero_best = max(
+                        hero_best,
+                        score,
+                    )
+
+                local_scored.append(
+                    (hero_best, name)
+                )
+
+            local_scored.sort(reverse=True)
+
+            best_score, best_name = local_scored[0]
+            second_score = (
+                local_scored[1][0]
+                if len(local_scored) > 1
+                else 0.0
+            )
+            margin = best_score - second_score
+
+            if (
+                best_score >= self.local_min_confidence
+                and margin >= self.local_min_margin
+            ):
+                return best_name, best_score
 
         scored = []
 
