@@ -50,7 +50,7 @@ killfeed:
 killfeed_parse:
   # Friendly/enemy direction is calibrated from the local player's own
   # kill-feed entry instead of assuming blue is always friendly.
-  friendly_team: "auto"
+  friendly_team: "blue"
   local_player_name: "MONKEYMAIN"
   local_player_name_match_threshold: 0.82
 
