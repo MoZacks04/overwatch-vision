@@ -10,6 +10,8 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
+from overwatch_vision.killfeed.hero_classifier import TrainedHeroClassifier
+
 
 class HeroRecognizer:
     """
@@ -77,6 +79,13 @@ class HeroRecognizer:
         self._loading = False
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
+
+        # When a locally trained kill-feed-specific CNN exists, it is the
+        # preferred recognizer. Template matching remains as a conservative
+        # fallback so the project still runs before training.
+        self.trained_classifier = TrainedHeroClassifier(
+            config
+        )
 
 
     def warmup_async(self):
@@ -405,6 +414,14 @@ class HeroRecognizer:
         if not self._ready:
             self.warmup_async()
             return None, 0.0
+
+        trained_name, trained_confidence = (
+            self.trained_classifier.recognize(
+                image
+            )
+        )
+        if trained_name is not None:
+            return trained_name, trained_confidence
 
         descriptor = self._descriptor(image)
         if descriptor is None:
