@@ -83,3 +83,8 @@ class KillFeedEvent:
     victim_hero_confidence: float = 0.0
     killer_name_confidence: float = 0.0
     victim_name_confidence: float = 0.0
+
+    # Snapshot of the normalized row's lightweight visual fingerprint.
+    # Used after parsing as a last-resort duplicate key when names/heroes
+    # are not available.
+    visual_fingerprint: Optional[np.ndarray] = None
