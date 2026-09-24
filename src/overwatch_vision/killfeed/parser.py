@@ -60,6 +60,9 @@ class KillFeedParser:
         self.min_name_confidence = float(
             self.cfg.get("min_name_confidence", 0.55)
         )
+        self.capture_hero_samples = bool(
+            self.cfg.get("capture_hero_samples", True)
+        )
 
         project_root = Path(__file__).resolve().parents[3]
         relative = str(
@@ -69,6 +72,15 @@ class KillFeedParser:
             )
         )
         self.review_dir = project_root / relative
+        self.hero_sample_dir = (
+            project_root
+            / str(
+                self.cfg.get(
+                    "hero_sample_directory",
+                    "debug_frames/hero_samples",
+                )
+            )
+        )
 
     def warmup_async(self):
         self.hero_recognizer.warmup_async()
@@ -143,13 +155,27 @@ class KillFeedParser:
         return None
 
     @staticmethod
-    def _local_components(row) -> list[Rect]:
+    def _local_components(row):
         boxes = list(
             getattr(row, "component_boxes_local", [])
             or []
         )
+        teams = list(
+            getattr(row, "component_teams_local", [])
+            or []
+        )
+
+        paired = list(zip(boxes, teams))
+        paired.sort(key=lambda item: item[0].cx)
+
+        if paired:
+            return paired
+
         boxes.sort(key=lambda box: box.cx)
-        return boxes
+        return [
+            (box, None)
+            for box in boxes
+        ]
 
     def _party_crops(
         self,
@@ -256,6 +282,72 @@ class KillFeedParser:
 
         return self._clean_name(text), confidence
 
+    @staticmethod
+    def _safe_filename_text(value: str | None) -> str:
+        if not value:
+            return "unknown"
+
+        cleaned = re.sub(
+            r"[^A-Za-z0-9_-]",
+            "",
+            value,
+        )
+        return cleaned or "unknown"
+
+    def _save_hero_samples(
+        self,
+        row,
+        killer_crop: np.ndarray,
+        victim_crop: np.ndarray,
+        killer_team: str | None,
+        victim_team: str | None,
+        killer_name: str | None,
+        victim_name: str | None,
+    ):
+        if not self.capture_hero_samples:
+            return
+
+        try:
+            self.hero_sample_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            stamp = int(time.time() * 1000)
+
+            cv2.imwrite(
+                str(
+                    self.hero_sample_dir
+                    / f"{stamp}_row.png"
+                ),
+                row.crop,
+            )
+
+            cv2.imwrite(
+                str(
+                    self.hero_sample_dir
+                    / (
+                        f"{stamp}_killer_"
+                        f"{killer_team or 'unknown'}_"
+                        f"{self._safe_filename_text(killer_name)}.png"
+                    )
+                ),
+                killer_crop,
+            )
+
+            cv2.imwrite(
+                str(
+                    self.hero_sample_dir
+                    / (
+                        f"{stamp}_victim_"
+                        f"{victim_team or 'unknown'}_"
+                        f"{self._safe_filename_text(victim_name)}.png"
+                    )
+                ),
+                victim_crop,
+            )
+        except Exception:
+            pass
+
     def _save_review_crop(
         self,
         row,
@@ -308,8 +400,8 @@ class KillFeedParser:
                 confidence=0.0,
             )
 
-        killer_box = components[0]
-        victim_box = components[-1]
+        killer_box, killer_team_hint = components[0]
+        victim_box, victim_team_hint = components[-1]
 
         killer_panel, killer_name_crop, killer_hero_crop = (
             self._party_crops(
@@ -326,8 +418,14 @@ class KillFeedParser:
             )
         )
 
-        killer_team = self._team_from_panel(killer_panel)
-        victim_team = self._team_from_panel(victim_panel)
+        killer_team = (
+            killer_team_hint
+            or self._team_from_panel(killer_panel)
+        )
+        victim_team = (
+            victim_team_hint
+            or self._team_from_panel(victim_panel)
+        )
 
         killer_name, killer_name_conf = self._read_name(
             killer_name_crop
@@ -345,6 +443,16 @@ class KillFeedParser:
             self.hero_recognizer.recognize(
                 victim_hero_crop
             )
+        )
+
+        self._save_hero_samples(
+            row,
+            killer_hero_crop,
+            victim_hero_crop,
+            killer_team,
+            victim_team,
+            killer_name,
+            victim_name,
         )
 
         confidence_values = [
