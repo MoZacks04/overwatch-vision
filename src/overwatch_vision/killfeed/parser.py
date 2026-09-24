@@ -182,87 +182,94 @@ class KillFeedParser:
         row_image: np.ndarray,
         panel_box: Rect,
         side: str,
+        hero_box: Rect | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         panel = self._safe_crop(
             row_image,
             panel_box,
         )
 
-        ph, pw = panel.shape[:2]
-        if ph <= 1 or pw <= 1:
+        if (
+            panel.size == 0
+            or panel.shape[0] <= 1
+            or panel.shape[1] <= 1
+        ):
             empty = np.zeros((1, 1, 3), dtype=np.uint8)
             return panel, empty, empty
 
-        # Overwatch's kill-feed layout is asymmetric:
-        #
-        #   killer name | killer portrait | action slot | victim portrait | victim name
-        #
-        # The colored contour for the killer side often extends through the
-        # action slot, so "take the final square of the killer panel" actually
-        # crops the weapon/action icon instead of the hero. Use row-height
-        # geometry to step one icon-width left of the action slot.
-        inset_y = max(0, int(ph * 0.05))
+        # Preferred path: the detector already computed the exact hero box.
+        # This guarantees parsing sees exactly the pixels outlined in yellow.
+        if hero_box is not None:
+            hero = self._safe_crop(
+                row_image,
+                hero_box,
+            )
+
+            if side == "killer":
+                name_box = Rect(
+                    x1=panel_box.x1,
+                    y1=panel_box.y1,
+                    x2=max(
+                        panel_box.x1 + 1,
+                        min(
+                            panel_box.x2,
+                            hero_box.x1,
+                        ),
+                    ),
+                    y2=panel_box.y2,
+                )
+            else:
+                name_box = Rect(
+                    x1=min(
+                        panel_box.x2 - 1,
+                        max(
+                            panel_box.x1,
+                            hero_box.x2,
+                        ),
+                    ),
+                    y1=panel_box.y1,
+                    x2=panel_box.x2,
+                    y2=panel_box.y2,
+                )
+
+            name = self._safe_crop(
+                row_image,
+                name_box,
+            )
+
+            return panel, name, hero
+
+        # Compatibility fallback for older rows without explicit geometry.
+        ph, pw = panel.shape[:2]
+        icon_width = max(
+            1,
+            min(
+                pw,
+                int(round(ph * 1.05)),
+            ),
+        )
+
+        inset_y = max(0, int(ph * 0.04))
         y1 = inset_y
         y2 = max(y1 + 1, ph - inset_y)
 
         if side == "killer":
-            start_rows = float(
-                self.cfg.get(
-                    "killer_hero_start_from_right_rows",
-                    2.25,
-                )
-            )
-            end_rows = float(
-                self.cfg.get(
-                    "killer_hero_end_from_right_rows",
-                    1.00,
-                )
-            )
-
-            hero_x1 = int(
-                round(pw - start_rows * ph)
-            )
-            hero_x2 = int(
-                round(pw - end_rows * ph)
-            )
-
-            hero_x1 = max(0, min(pw - 1, hero_x1))
-            hero_x2 = max(
-                hero_x1 + 1,
-                min(pw, hero_x2),
-            )
-
             hero = panel[
                 y1:y2,
-                hero_x1:hero_x2,
+                max(0, pw - icon_width):pw,
             ]
             name = panel[
                 y1:y2,
-                0:max(1, hero_x1),
+                0:max(1, pw - icon_width),
             ]
         else:
-            hero_rows = float(
-                self.cfg.get(
-                    "victim_hero_width_rows",
-                    1.15,
-                )
-            )
-
-            hero_x2 = int(
-                round(hero_rows * ph)
-            )
-            hero_x2 = max(
-                1,
-                min(pw, hero_x2),
-            )
-
             hero = panel[
                 y1:y2,
-                0:hero_x2,
+                0:icon_width,
             ]
             name = panel[
                 y1:y2,
-                hero_x2:pw,
+                min(pw, icon_width):pw,
             ]
 
         return panel, name, hero
@@ -400,14 +407,39 @@ class KillFeedParser:
                 confidence=0.0,
             )
 
-        killer_box, killer_team_hint = components[0]
-        victim_box, victim_team_hint = components[-1]
+        fallback_killer_box, fallback_killer_team = (
+            components[0]
+        )
+        fallback_victim_box, fallback_victim_team = (
+            components[-1]
+        )
+
+        killer_box = (
+            row.killer_panel_local
+            if row.killer_panel_local is not None
+            else fallback_killer_box
+        )
+        victim_box = (
+            row.victim_panel_local
+            if row.victim_panel_local is not None
+            else fallback_victim_box
+        )
+
+        killer_team_hint = (
+            row.killer_team_hint
+            or fallback_killer_team
+        )
+        victim_team_hint = (
+            row.victim_team_hint
+            or fallback_victim_team
+        )
 
         killer_panel, killer_name_crop, killer_hero_crop = (
             self._party_crops(
                 row.crop,
                 killer_box,
                 "killer",
+                row.killer_hero_box_local,
             )
         )
         victim_panel, victim_name_crop, victim_hero_crop = (
@@ -415,6 +447,7 @@ class KillFeedParser:
                 row.crop,
                 victim_box,
                 "victim",
+                row.victim_hero_box_local,
             )
         )
 
