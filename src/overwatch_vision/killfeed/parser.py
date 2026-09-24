@@ -151,13 +151,13 @@ class KillFeedParser:
         boxes.sort(key=lambda box: box.cx)
         return boxes
 
-    @staticmethod
     def _party_crops(
+        self,
         row_image: np.ndarray,
         panel_box: Rect,
         side: str,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        panel = KillFeedParser._safe_crop(
+        panel = self._safe_crop(
             row_image,
             panel_box,
         )
@@ -167,35 +167,76 @@ class KillFeedParser:
             empty = np.zeros((1, 1, 3), dtype=np.uint8)
             return panel, empty, empty
 
-        icon_width = int(
-            max(
-                ph * 0.78,
-                min(ph * 1.25, pw * 0.38),
-            )
-        )
-        icon_width = max(1, min(pw, icon_width))
-
-        inset_y = max(0, int(ph * 0.08))
+        # Overwatch's kill-feed layout is asymmetric:
+        #
+        #   killer name | killer portrait | action slot | victim portrait | victim name
+        #
+        # The colored contour for the killer side often extends through the
+        # action slot, so "take the final square of the killer panel" actually
+        # crops the weapon/action icon instead of the hero. Use row-height
+        # geometry to step one icon-width left of the action slot.
+        inset_y = max(0, int(ph * 0.05))
         y1 = inset_y
         y2 = max(y1 + 1, ph - inset_y)
 
         if side == "killer":
+            start_rows = float(
+                self.cfg.get(
+                    "killer_hero_start_from_right_rows",
+                    2.25,
+                )
+            )
+            end_rows = float(
+                self.cfg.get(
+                    "killer_hero_end_from_right_rows",
+                    1.00,
+                )
+            )
+
+            hero_x1 = int(
+                round(pw - start_rows * ph)
+            )
+            hero_x2 = int(
+                round(pw - end_rows * ph)
+            )
+
+            hero_x1 = max(0, min(pw - 1, hero_x1))
+            hero_x2 = max(
+                hero_x1 + 1,
+                min(pw, hero_x2),
+            )
+
             hero = panel[
                 y1:y2,
-                max(0, pw - icon_width):pw,
+                hero_x1:hero_x2,
             ]
             name = panel[
                 y1:y2,
-                0:max(1, pw - icon_width),
+                0:max(1, hero_x1),
             ]
         else:
+            hero_rows = float(
+                self.cfg.get(
+                    "victim_hero_width_rows",
+                    1.15,
+                )
+            )
+
+            hero_x2 = int(
+                round(hero_rows * ph)
+            )
+            hero_x2 = max(
+                1,
+                min(pw, hero_x2),
+            )
+
             hero = panel[
                 y1:y2,
-                0:icon_width,
+                0:hero_x2,
             ]
             name = panel[
                 y1:y2,
-                min(pw, icon_width):pw,
+                hero_x2:pw,
             ]
 
         return panel, name, hero
