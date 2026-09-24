@@ -13,6 +13,7 @@ from overwatch_vision.capture import OverwatchCapture
 from overwatch_vision.debug_view import DebugView
 from overwatch_vision.killfeed.async_parser import AsyncKillFeedParser
 from overwatch_vision.killfeed.detector import KillFeedDetector
+from overwatch_vision.killfeed.event_deduper import ParsedEventDeduper
 from overwatch_vision.killfeed.parser import KillFeedParser
 from overwatch_vision.ocr import OCRReader
 from overwatch_vision.regions import HUDRegionManager
@@ -178,6 +179,8 @@ def main():
         parser,
     )
     parser_worker.start()
+
+    event_deduper = ParsedEventDeduper(config)
 
     # Team counts now use cheap digit templates, not EasyOCR.
     team_status_detector = TeamStatusDetector(config)
@@ -446,6 +449,13 @@ def main():
                             f"from local player {local_player_name}"
                         )
 
+                if event_deduper.is_duplicate(event):
+                    print(
+                        "[dedupe] suppressed repeated elimination "
+                        f"track={event.track_id}"
+                    )
+                    continue
+
                 console_text = _event_console_text(event)
                 print(
                     f"[killfeed] track={event.track_id} "
@@ -539,8 +549,9 @@ def main():
 
             if key in (ord("r"), ord("R")):
                 killfeed.reset()
+                event_deduper.reset()
                 session_start = time.monotonic()
-                print("[killfeed] tracker reset")
+                print("[killfeed] tracker + event dedupe reset")
 
             elapsed = time.perf_counter() - loop_start
             remaining = target_dt - elapsed
