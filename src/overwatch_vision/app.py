@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from difflib import SequenceMatcher
+import re
 import time
 
 import cv2
@@ -39,6 +41,34 @@ def _person_label(
         return f"{hero_text} {player_name}"
 
     return hero_text
+
+
+def _normalize_player_name(value: str | None) -> str:
+    if not value:
+        return ""
+
+    return re.sub(
+        r"[^A-Za-z0-9]",
+        "",
+        value,
+    ).lower()
+
+
+def _name_match_score(a: str | None, b: str | None) -> float:
+    left = _normalize_player_name(a)
+    right = _normalize_player_name(b)
+
+    if not left or not right:
+        return 0.0
+
+    if left == right:
+        return 1.0
+
+    return SequenceMatcher(
+        None,
+        left,
+        right,
+    ).ratio()
 
 
 def _event_console_text(event) -> str:
@@ -161,9 +191,27 @@ def main():
         audio.announce("Overwatch Vision audio ready.")
 
     parse_cfg = config.get("killfeed_parse", {})
-    friendly_team = str(
-        parse_cfg.get("friendly_team", "blue")
+
+    configured_friendly_team = str(
+        parse_cfg.get("friendly_team", "auto")
     ).lower()
+
+    friendly_team = (
+        configured_friendly_team
+        if configured_friendly_team in ("red", "blue")
+        else None
+    )
+
+    local_player_name = str(
+        parse_cfg.get("local_player_name", "")
+    ).strip()
+
+    local_name_match_threshold = float(
+        parse_cfg.get(
+            "local_player_name_match_threshold",
+            0.82,
+        )
+    )
     speak_player_names = bool(
         audio_cfg.get("speak_player_names", False)
     )
@@ -249,6 +297,18 @@ def main():
         "[vision] Username OCR and hero parsing run in the background. "
         "They no longer block capture."
     )
+
+    if configured_friendly_team == "auto":
+        print(
+            "[teams] ally/enemy direction is in AUTO mode. "
+            f"Waiting to see local player: "
+            f"{local_player_name or 'not configured'}"
+        )
+    else:
+        print(
+            "[teams] friendly kill-feed color forced to "
+            f"{friendly_team}"
+        )
 
     try:
         while True:
@@ -350,17 +410,62 @@ def main():
             )
 
             for event in parsed_events:
+                if (
+                    configured_friendly_team == "auto"
+                    and local_player_name
+                ):
+                    killer_match = _name_match_score(
+                        event.killer_name,
+                        local_player_name,
+                    )
+                    victim_match = _name_match_score(
+                        event.victim_name,
+                        local_player_name,
+                    )
+
+                    calibrated = None
+
+                    if (
+                        killer_match >= local_name_match_threshold
+                        and event.killer_team in ("red", "blue")
+                    ):
+                        calibrated = event.killer_team
+
+                    if (
+                        victim_match >= local_name_match_threshold
+                        and event.victim_team in ("red", "blue")
+                        and victim_match >= killer_match
+                    ):
+                        calibrated = event.victim_team
+
+                    if calibrated is not None and calibrated != friendly_team:
+                        friendly_team = calibrated
+                        print(
+                            "[teams] friendly kill-feed color "
+                            f"calibrated to {friendly_team} "
+                            f"from local player {local_player_name}"
+                        )
+
                 console_text = _event_console_text(event)
                 print(
                     f"[killfeed] track={event.track_id} "
                     f"{console_text}"
                 )
 
-                speech = _event_speech(
-                    event,
-                    friendly_team=friendly_team,
-                    speak_player_names=speak_player_names,
-                )
+                if friendly_team is None:
+                    if event.killer_hero and event.victim_hero:
+                        speech = (
+                            f"{event.killer_hero} eliminated "
+                            f"{event.victim_hero}."
+                        )
+                    else:
+                        speech = None
+                else:
+                    speech = _event_speech(
+                        event,
+                        friendly_team=friendly_team,
+                        speak_player_names=speak_player_names,
+                    )
 
                 if speech:
                     debug.notify_event(speech)
