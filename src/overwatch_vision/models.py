@@ -45,6 +45,7 @@ class KillFeedRow:
     normalized: np.ndarray
     fingerprint: np.ndarray
     component_boxes_local: list[Rect] = field(default_factory=list)
+    component_teams_local: list[str] = field(default_factory=list)
     score: float = 0.0
 
 
