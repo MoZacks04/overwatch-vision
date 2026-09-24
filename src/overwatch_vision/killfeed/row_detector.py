@@ -7,9 +7,16 @@ from overwatch_vision.models import Rect
 
 
 @dataclass(slots=True)
+class PanelComponent:
+    bbox: Rect
+    team: str
+
+
+@dataclass(slots=True)
 class RowCandidate:
     bbox: Rect
-    component_boxes: list
+    component_boxes: list[Rect]
+    component_teams: list[str]
     score: float
 
 
@@ -17,18 +24,15 @@ class KillFeedRowDetector:
     """
     Detect kill-feed rows from the colored Overwatch nameplates.
 
-    The previous detector used a generic "high saturation" mask. That worked
-    for HUD elements, but it also reacted strongly to colorful map geometry
-    and to the team-status widget. Kill-feed rows are much more structured:
-    each normal elimination row contains two filled, horizontal team-colored
-    nameplates. We detect those panels first, then group panels that share a
-    vertical center into a row.
+    Red and blue masks are kept separate all the way through detection so
+    downstream parsing does not have to guess a panel's team from hero art or
+    text pixels.
     """
 
     def __init__(self, config):
         self.cfg = config["killfeed"]
 
-    def _panel_mask(self, roi):
+    def _panel_masks(self, roi):
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         colors = self.cfg["color_panels"]
 
@@ -71,6 +75,7 @@ class KillFeedRowDetector:
                 dtype=np.uint8,
             ),
         )
+        red_mask = cv2.bitwise_or(red_a, red_b)
 
         blue = colors["blue"]
         blue_mask = cv2.inRange(
@@ -93,12 +98,38 @@ class KillFeedRowDetector:
             ),
         )
 
-        return cv2.bitwise_or(
-            cv2.bitwise_or(red_a, red_b),
-            blue_mask,
+        kernel_open = np.ones((2, 2), np.uint8)
+        kernel_close = np.ones((5, 3), np.uint8)
+
+        red_mask = cv2.morphologyEx(
+            red_mask,
+            cv2.MORPH_OPEN,
+            kernel_open,
+        )
+        red_mask = cv2.morphologyEx(
+            red_mask,
+            cv2.MORPH_CLOSE,
+            kernel_close,
         )
 
-    def _find_panel_components(self, mask):
+        blue_mask = cv2.morphologyEx(
+            blue_mask,
+            cv2.MORPH_OPEN,
+            kernel_open,
+        )
+        blue_mask = cv2.morphologyEx(
+            blue_mask,
+            cv2.MORPH_CLOSE,
+            kernel_close,
+        )
+
+        combined = cv2.bitwise_or(
+            red_mask,
+            blue_mask,
+        )
+        return red_mask, blue_mask, combined
+
+    def _find_panel_components(self, mask, team):
         h, w = mask.shape[:2]
         roi_area = float(h * w)
 
@@ -152,15 +183,17 @@ class KillFeedRowDetector:
                 continue
 
             components.append(
-                Rect(
-                    x1=x,
-                    y1=y,
-                    x2=x + bw,
-                    y2=y + bh,
+                PanelComponent(
+                    bbox=Rect(
+                        x1=x,
+                        y1=y,
+                        x2=x + bw,
+                        y2=y + bh,
+                    ),
+                    team=team,
                 )
             )
 
-        components.sort(key=lambda r: r.cy)
         return components
 
     def _group_components(self, components, roi_height):
@@ -175,10 +208,19 @@ class KillFeedRowDetector:
             best_distance = float("inf")
 
             for group in groups:
-                mean_y = sum(r.cy for r in group) / len(group)
-                distance = abs(component.cy - mean_y)
+                mean_y = sum(
+                    item.bbox.cy
+                    for item in group
+                ) / len(group)
 
-                if distance <= tolerance and distance < best_distance:
+                distance = abs(
+                    component.bbox.cy - mean_y
+                )
+
+                if (
+                    distance <= tolerance
+                    and distance < best_distance
+                ):
                     best_group = group
                     best_distance = distance
 
@@ -195,9 +237,18 @@ class KillFeedRowDetector:
 
         h, w = roi.shape[:2]
 
-        mask = self._panel_mask(roi)
-        components = self._find_panel_components(mask)
-        groups = self._group_components(components, h)
+        red_mask, blue_mask, combined = self._panel_masks(roi)
+
+        components = (
+            self._find_panel_components(red_mask, "red")
+            + self._find_panel_components(blue_mask, "blue")
+        )
+        components.sort(key=lambda item: item.bbox.cy)
+
+        groups = self._group_components(
+            components,
+            h,
+        )
 
         candidates = []
 
@@ -215,10 +266,20 @@ class KillFeedRowDetector:
             if len(group) < min_components:
                 continue
 
-            x1 = min(r.x1 for r in group)
-            y1 = min(r.y1 for r in group)
-            x2 = max(r.x2 for r in group)
-            y2 = max(r.y2 for r in group)
+            group.sort(key=lambda item: item.bbox.cx)
+            boxes = [
+                item.bbox
+                for item in group
+            ]
+            teams = [
+                item.team
+                for item in group
+            ]
+
+            x1 = min(r.x1 for r in boxes)
+            y1 = min(r.y1 for r in boxes)
+            x2 = max(r.x2 for r in boxes)
+            y2 = max(r.y2 for r in boxes)
 
             pad_x = max(4, int(0.015 * w))
             pad_y = max(2, int(0.025 * h))
@@ -261,11 +322,18 @@ class KillFeedRowDetector:
             candidates.append(
                 RowCandidate(
                     bbox=row,
-                    component_boxes=group,
+                    component_boxes=boxes,
+                    component_teams=teams,
                     score=score,
                 )
             )
 
-        candidates.sort(key=lambda c: c.bbox.y1)
+        candidates.sort(
+            key=lambda c: c.bbox.y1
+        )
 
-        return candidates, mask, components
+        return (
+            candidates,
+            combined,
+            [item.bbox for item in components],
+        )
