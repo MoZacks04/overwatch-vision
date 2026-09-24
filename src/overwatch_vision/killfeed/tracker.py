@@ -170,6 +170,9 @@ class KillFeedTracker:
                         track_id=track.track_id,
                         timestamp=timestamp,
                         confidence=track.row.score,
+                        visual_fingerprint=(
+                            track.row.fingerprint.copy()
+                        ),
                     )
                 )
 
