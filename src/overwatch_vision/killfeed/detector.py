@@ -339,6 +339,15 @@ class KillFeedDetector:
                 return track.row
         return None
 
+    def get_track_rows(self, track_id, limit=5):
+        for track in self.tracker.tracks:
+            if track.track_id == track_id:
+                history = list(track.row_history)
+                if not history:
+                    history = [track.row]
+                return history[-max(1, int(limit)):]
+        return []
+
     def process(self, roi_image, roi_rect, timestamp):
         candidates, mask, components = self.row_detector.detect(
             roi_image
