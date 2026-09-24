@@ -468,8 +468,16 @@ def main():
                     )
 
                 if speech:
+                    print(
+                        f"[audio] queued: {speech}"
+                    )
                     debug.notify_event(speech)
                     audio.announce_elimination(speech)
+                else:
+                    print(
+                        "[audio] no spoken call for this event "
+                        "(insufficient identity/team confidence)"
+                    )
 
             now = time.perf_counter()
             dt = max(
