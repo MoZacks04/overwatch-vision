@@ -50,6 +50,12 @@ killfeed:
 killfeed_parse:
   friendly_team: "blue"
 
+  # Kill-feed geometry. The killer-side colored contour includes the action
+  # slot, so the killer portrait is roughly one row-height left of the edge.
+  killer_hero_start_from_right_rows: 2.25
+  killer_hero_end_from_right_rows: 1.00
+  victim_hero_width_rows: 1.15
+
   # Do not accept arbitrary OCR guesses for player handles.
   min_name_confidence: 0.55
 
@@ -101,6 +107,11 @@ tracking:
   max_vertical_shift_fraction: 0.18
   fingerprint_size: 16
   fingerprint_match_threshold: 0.78
+
+  # If an animated/fading row temporarily loses its track and is recreated,
+  # suppress the second emission for a short period.
+  dedupe_seconds: 2.25
+  dedupe_similarity: 0.90
 
 audio:
   enabled: true
