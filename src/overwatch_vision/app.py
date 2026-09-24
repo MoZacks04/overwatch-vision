@@ -82,7 +82,7 @@ def _event_speech(
     event,
     friendly_team: str,
     speak_player_names: bool,
-) -> str:
+) -> str | None:
     # Team-side classification is currently much more trustworthy than hero
     # recognition. Never invent a hero name just because the matcher found a
     # weak nearest neighbour; fall back to "enemy" / "ally" language.
@@ -123,7 +123,10 @@ def _event_speech(
     if event.killer_hero or event.victim_hero:
         return f"{killer} eliminated {victim}."
 
-    return "Elimination detected."
+    # If even the team direction is unclear, stay silent rather than adding
+    # a vague second call like "Elimination detected". The terminal still
+    # records the event for debugging.
+    return None
 
 
 def main():
@@ -359,8 +362,9 @@ def main():
                     speak_player_names=speak_player_names,
                 )
 
-                debug.notify_event(speech)
-                audio.announce_elimination(speech)
+                if speech:
+                    debug.notify_event(speech)
+                    audio.announce_elimination(speech)
 
             now = time.perf_counter()
             dt = max(
