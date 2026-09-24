@@ -128,6 +128,13 @@ tracking:
   dedupe_seconds: 2.25
   dedupe_similarity: 0.90
 
+event_dedupe:
+  # Final duplicate guard after names/heroes are parsed. Same player pair or
+  # hero pair will only be announced once inside this window. If identity is
+  # still unknown, the row's visual fingerprint is used as a fallback.
+  window_seconds: 10.0
+  visual_similarity: 0.86
+
 audio:
   enabled: true
   phrase: "Elimination detected"
