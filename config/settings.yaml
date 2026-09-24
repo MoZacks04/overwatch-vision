@@ -50,13 +50,11 @@ killfeed:
 killfeed_parse:
   friendly_team: "blue"
 
-  # Kill-feed hero portraits occupy roughly one row-height square at the
-  # inner edge of each colored nameplate.
-  hero_width_rows: 0.98
-
-  # Require a clear red/blue separation before making ally/enemy speech.
-  team_min_fraction: 0.22
-  team_min_margin: 0.10
+  # Kill-feed geometry. The killer-side colored contour includes the action
+  # slot, so the killer portrait is roughly one row-height left of the edge.
+  killer_hero_start_from_right_rows: 2.25
+  killer_hero_end_from_right_rows: 1.00
+  victim_hero_width_rows: 1.15
 
   # Do not accept arbitrary OCR guesses for player handles.
   min_name_confidence: 0.55
@@ -64,11 +62,6 @@ killfeed_parse:
   save_low_confidence_crops: true
   low_confidence_threshold: 0.58
   review_directory: "debug_frames/killfeed_review"
-
-  # Save uncertain extracted hero portraits so we can tune recognition from
-  # the exact kill-feed pixels rather than guessing at thresholds.
-  save_hero_crops: true
-  hero_crop_directory: "debug_frames/hero_crops"
 
 team_status:
   enabled: true
@@ -103,8 +96,8 @@ hero_recognition:
 
   # Hero names are only spoken when the match is both strong and clearly
   # better than the runner-up. False negatives are preferable to false calls.
-  min_confidence: 0.68
-  min_margin: 0.05
+  min_confidence: 0.72
+  min_margin: 0.06
   min_gray_stddev: 16.0
   debug_rejections: true
 
@@ -117,9 +110,8 @@ tracking:
 
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
-  dedupe_seconds: 3.0
-  dedupe_similarity: 0.86
-  dedupe_hash_similarity: 0.90
+  dedupe_seconds: 2.25
+  dedupe_similarity: 0.90
 
 audio:
   enabled: true
