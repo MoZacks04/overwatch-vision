@@ -11,7 +11,7 @@ from overwatch_vision.models import KillFeedEvent, KillFeedRow, Rect
 @dataclass(slots=True)
 class ParseJob:
     event: KillFeedEvent
-    row: KillFeedRow
+    rows: list[KillFeedRow]
 
 
 class AsyncKillFeedParser:
@@ -97,14 +97,26 @@ class AsyncKillFeedParser:
         )
         self._thread.start()
 
-    def submit(self, event: KillFeedEvent, row: KillFeedRow):
+    def submit(
+        self,
+        event: KillFeedEvent,
+        rows: list[KillFeedRow],
+    ):
         if not self._started:
             self.start()
+
+        snapshots = [
+            self._snapshot_row(row)
+            for row in rows
+        ]
+
+        if not snapshots:
+            return
 
         self._jobs.put(
             ParseJob(
                 event=event,
-                row=self._snapshot_row(row),
+                rows=snapshots,
             )
         )
 
@@ -168,7 +180,9 @@ class AsyncKillFeedParser:
                 break
 
             try:
-                parsed = self.parser.parse(job.row)
+                parsed = self.parser.parse_consensus(
+                    job.rows
+                )
                 self._apply_parse(job.event, parsed)
             except Exception as exc:
                 print(
