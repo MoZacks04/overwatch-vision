@@ -413,6 +413,15 @@ class KillFeedRowDetector:
             + 0.12 * fill_score
         )
 
+        min_pair_score = float(
+            self.cfg.get(
+                "min_pair_score",
+                0.55,
+            )
+        )
+        if score < min_pair_score:
+            return None
+
         pad_x = max(
             2,
             int(
