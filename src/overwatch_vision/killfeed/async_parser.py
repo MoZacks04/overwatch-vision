@@ -55,6 +55,9 @@ class AsyncKillFeedParser:
                 cls._copy_rect(box)
                 for box in row.component_boxes_local
             ],
+            component_teams_local=list(
+                row.component_teams_local
+            ),
             score=row.score,
         )
 
