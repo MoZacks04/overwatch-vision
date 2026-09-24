@@ -1,3 +1,6 @@
+import cv2
+import numpy as np
+
 from overwatch_vision.models import KillFeedRow, Rect
 from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
 from overwatch_vision.killfeed.row_normalizer import KillFeedRowNormalizer
@@ -60,12 +63,192 @@ class KillFeedDetector:
             y2=max(0, min(height, rect.y2)),
         )
 
+    @staticmethod
+    def _portrait_texture_score(patch):
+        if (
+            patch is None
+            or patch.size == 0
+            or patch.shape[0] < 4
+            or patch.shape[1] < 4
+        ):
+            return -1.0
+
+        gray = cv2.cvtColor(
+            patch,
+            cv2.COLOR_BGR2GRAY,
+        )
+
+        texture = min(
+            1.0,
+            float(np.std(gray)) / 62.0,
+        )
+
+        gx = cv2.Sobel(
+            gray,
+            cv2.CV_32F,
+            1,
+            0,
+            ksize=3,
+        )
+        gy = cv2.Sobel(
+            gray,
+            cv2.CV_32F,
+            0,
+            1,
+            ksize=3,
+        )
+        edge_energy = np.sqrt(
+            gx * gx + gy * gy
+        )
+        edge_score = min(
+            1.0,
+            float(np.mean(edge_energy)) / 72.0,
+        )
+
+        return (
+            0.62 * texture
+            + 0.38 * edge_score
+        )
+
+    def _refine_hero_box(
+        self,
+        row_image,
+        base_box,
+    ):
+        """
+        Nudge a geometric hero box a few pixels toward the most portrait-like
+        local patch. The search is intentionally small so it fixes contour
+        boundary drift without jumping onto the action icon or nearby scenery.
+        """
+        cfg = self.config.get(
+            "killfeed_parse",
+            {},
+        )
+
+        if not bool(
+            cfg.get(
+                "refine_hero_boxes",
+                True,
+            )
+        ):
+            return base_box
+
+        h, w = row_image.shape[:2]
+        size = max(
+            4,
+            min(
+                base_box.width,
+                base_box.height,
+            ),
+        )
+
+        search_x = max(
+            1,
+            int(
+                round(
+                    size
+                    * float(
+                        cfg.get(
+                            "hero_refine_search_x_rows",
+                            0.24,
+                        )
+                    )
+                )
+            ),
+        )
+        search_y = max(
+            1,
+            int(
+                round(
+                    size
+                    * float(
+                        cfg.get(
+                            "hero_refine_search_y_rows",
+                            0.10,
+                        )
+                    )
+                )
+            ),
+        )
+        step = max(
+            1,
+            int(
+                round(
+                    size
+                    * float(
+                        cfg.get(
+                            "hero_refine_step_rows",
+                            0.06,
+                        )
+                    )
+                )
+            ),
+        )
+
+        best_box = base_box
+        best_score = -1.0
+
+        for dy in range(
+            -search_y,
+            search_y + 1,
+            step,
+        ):
+            for dx in range(
+                -search_x,
+                search_x + 1,
+                step,
+            ):
+                x1 = base_box.x1 + dx
+                y1 = base_box.y1 + dy
+                x2 = x1 + size
+                y2 = y1 + size
+
+                if (
+                    x1 < 0
+                    or y1 < 0
+                    or x2 > w
+                    or y2 > h
+                ):
+                    continue
+
+                patch = row_image[
+                    y1:y2,
+                    x1:x2,
+                ]
+                visual = self._portrait_texture_score(
+                    patch
+                )
+
+                distance = (
+                    abs(dx) / max(1.0, search_x)
+                    + abs(dy) / max(1.0, search_y)
+                ) / 2.0
+
+                # Stay close to the geometrically expected square unless a
+                # nearby patch is clearly more portrait-like.
+                score = (
+                    visual
+                    - 0.10 * distance
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_box = Rect(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                    )
+
+        return best_box
+
     def _hero_boxes_from_panels(
         self,
         killer_panel,
         victim_panel,
         row_width,
         row_height,
+        row_image=None,
     ):
         kcfg = self.config.get("killfeed_parse", {})
 
@@ -138,6 +321,16 @@ class KillFeedDetector:
             row_height,
         )
 
+        if row_image is not None:
+            killer_box = self._refine_hero_box(
+                row_image,
+                killer_box,
+            )
+            victim_box = self._refine_hero_box(
+                row_image,
+                victim_box,
+            )
+
         return killer_box, victim_box
 
     def get_track_row(self, track_id):
@@ -195,6 +388,7 @@ class KillFeedDetector:
                     victim_panel_local,
                     crop.shape[1],
                     crop.shape[0],
+                    crop,
                 )
             )
 
