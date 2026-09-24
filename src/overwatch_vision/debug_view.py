@@ -23,12 +23,47 @@ class DebugView:
 
     def _hero_icon_boxes(self, row):
         """
-        Return diagnostic killer/victim portrait boxes in row-local coords.
+        Return the exact hero portrait boxes used by parsing.
 
-        These are intentionally visual diagnostics, not trusted parsing
-        results. They let us verify the exact portrait geometry from real
-        kill-feed examples before training/tuning hero recognition.
+        New rows carry explicit killer/victim hero geometry from the detector.
+        Keeping debug rendering tied to those same Rects means the yellow K/V
+        boxes are a truthful preview of the recognizer input.
         """
+        killer = getattr(
+            row,
+            "killer_hero_box_local",
+            None,
+        )
+        victim = getattr(
+            row,
+            "victim_hero_box_local",
+            None,
+        )
+
+        if killer is not None and victim is not None:
+            return [
+                (
+                    "K",
+                    (
+                        killer.x1,
+                        killer.y1,
+                        killer.x2,
+                        killer.y2,
+                    ),
+                ),
+                (
+                    "V",
+                    (
+                        victim.x1,
+                        victim.y1,
+                        victim.x2,
+                        victim.y2,
+                    ),
+                ),
+            ]
+
+        # Compatibility fallback for tracks created before explicit geometry
+        # was added.
         components = list(
             getattr(row, "component_boxes_local", [])
             or []
@@ -41,21 +76,24 @@ class DebugView:
         killer_panel = components[0]
         victim_panel = components[-1]
 
-        scale = float(
-            self.cfg.get("hero_icon_width_rows", 1.0)
-        )
-
-        killer_width = max(
+        size = max(
             1,
-            int(round(killer_panel.height * scale)),
-        )
-        victim_width = max(
-            1,
-            int(round(victim_panel.height * scale)),
+            int(
+                round(
+                    (
+                        killer_panel.height
+                        + victim_panel.height
+                    )
+                    / 2.0
+                )
+            ),
         )
 
         killer = (
-            max(killer_panel.x1, killer_panel.x2 - killer_width),
+            max(
+                killer_panel.x1,
+                killer_panel.x2 - size,
+            ),
             killer_panel.y1,
             killer_panel.x2,
             killer_panel.y2,
@@ -63,7 +101,10 @@ class DebugView:
         victim = (
             victim_panel.x1,
             victim_panel.y1,
-            min(victim_panel.x2, victim_panel.x1 + victim_width),
+            min(
+                victim_panel.x2,
+                victim_panel.x1 + size,
+            ),
             victim_panel.y2,
         )
 
@@ -209,6 +250,22 @@ class DebugView:
                     thickness=2,
                 )
 
+        # A row detector only runs at ~10 Hz, while the preview runs at
+        # ~30 FPS. Draw K/V boxes from confirmed tracks as well so they do
+        # not disappear on the two frames between detector updates.
+        if self.show_details:
+            for track in active_tracks:
+                if not track.confirmed:
+                    continue
+
+                self._draw_hero_boxes(
+                    output,
+                    track.row,
+                    track.row.bbox_game.x1,
+                    track.row.bbox_game.y1,
+                    thickness=2,
+                )
+
         confirmed = sum(
             1 for track in active_tracks
             if track.confirmed
@@ -347,6 +404,14 @@ class DebugView:
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA,
+            )
+
+            self._draw_hero_boxes(
+                output,
+                track.row,
+                track.row.bbox_roi.x1,
+                track.row.bbox_roi.y1,
+                thickness=1,
             )
 
         status = (
