@@ -7,3 +7,5 @@ __pycache__/
 logs/
 debug_frames/
 *.log
+datasets/
+models/
