@@ -75,6 +75,14 @@ killfeed_parse:
   hero_icon_size_rows: 1.08
   hero_inner_edge_offset_rows: 0.04
 
+  # After the geometric square is predicted, search only a few pixels around
+  # it for the most portrait-like patch. This fixes mask-edge drift without
+  # letting the box jump to the action icon.
+  refine_hero_boxes: true
+  hero_refine_search_x_rows: 0.24
+  hero_refine_search_y_rows: 0.10
+  hero_refine_step_rows: 0.06
+
   # Do not accept arbitrary OCR guesses for player handles.
   min_name_confidence: 0.55
 
