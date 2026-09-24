@@ -12,6 +12,7 @@ from overwatch_vision.utils.image_ops import fingerprint_similarity
 class RecentEmission:
     timestamp: float
     fingerprint: np.ndarray
+    dhash: np.ndarray
 
 
 class KillFeedTracker:
@@ -32,10 +33,13 @@ class KillFeedTracker:
         # of emitted rows so the same visible kill-feed entry is not spoken
         # twice.
         self.dedupe_seconds = float(
-            cfg.get("dedupe_seconds", 2.25)
+            cfg.get("dedupe_seconds", 3.0)
         )
         self.dedupe_similarity = float(
-            cfg.get("dedupe_similarity", 0.90)
+            cfg.get("dedupe_similarity", 0.86)
+        )
+        self.dedupe_hash_similarity = float(
+            cfg.get("dedupe_hash_similarity", 0.90)
         )
 
         self.tracks = []
@@ -76,16 +80,51 @@ class KillFeedTracker:
             if item.timestamp >= cutoff
         ]
 
+    @staticmethod
+    def _dhash(image: np.ndarray) -> np.ndarray:
+        if image is None or image.size == 0:
+            return np.zeros(128, dtype=np.bool_)
+
+        if image.ndim == 3:
+            # Avoid another OpenCV dependency here; simple channel mean is
+            # sufficient for a perceptual difference hash.
+            gray = image.mean(axis=2)
+        else:
+            gray = image
+
+        # Nearest-neighbour index sampling keeps this tiny and deterministic.
+        ys = np.linspace(
+            0,
+            gray.shape[0] - 1,
+            8,
+        ).astype(np.int32)
+        xs = np.linspace(
+            0,
+            gray.shape[1] - 1,
+            17,
+        ).astype(np.int32)
+        small = gray[np.ix_(ys, xs)]
+        return (small[:, 1:] > small[:, :-1]).reshape(-1)
+
     def _is_recent_duplicate(self, row, timestamp: float) -> bool:
         self._prune_recent(timestamp)
+
+        row_hash = self._dhash(row.normalized)
 
         for item in self.recent_emissions:
             similarity = fingerprint_similarity(
                 item.fingerprint,
                 row.fingerprint,
             )
+            hash_similarity = float(
+                np.mean(item.dhash == row_hash)
+            )
 
-            if similarity >= self.dedupe_similarity:
+            if (
+                similarity >= self.dedupe_similarity
+                or hash_similarity
+                >= self.dedupe_hash_similarity
+            ):
                 return True
 
         return False
@@ -95,6 +134,7 @@ class KillFeedTracker:
             RecentEmission(
                 timestamp=timestamp,
                 fingerprint=row.fingerprint.copy(),
+                dhash=self._dhash(row.normalized),
             )
         )
         self._prune_recent(timestamp)
