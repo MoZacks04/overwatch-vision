@@ -21,6 +21,95 @@ class DebugView:
         self.last_event_time = time.monotonic()
         self.last_event_text = text
 
+    def _hero_icon_boxes(self, row):
+        """
+        Return diagnostic killer/victim portrait boxes in row-local coords.
+
+        These are intentionally visual diagnostics, not trusted parsing
+        results. They let us verify the exact portrait geometry from real
+        kill-feed examples before training/tuning hero recognition.
+        """
+        components = list(
+            getattr(row, "component_boxes_local", [])
+            or []
+        )
+        components.sort(key=lambda box: box.cx)
+
+        if len(components) < 2:
+            return []
+
+        killer_panel = components[0]
+        victim_panel = components[-1]
+
+        scale = float(
+            self.cfg.get("hero_icon_width_rows", 1.0)
+        )
+
+        killer_width = max(
+            1,
+            int(round(killer_panel.height * scale)),
+        )
+        victim_width = max(
+            1,
+            int(round(victim_panel.height * scale)),
+        )
+
+        killer = (
+            max(killer_panel.x1, killer_panel.x2 - killer_width),
+            killer_panel.y1,
+            killer_panel.x2,
+            killer_panel.y2,
+        )
+        victim = (
+            victim_panel.x1,
+            victim_panel.y1,
+            min(victim_panel.x2, victim_panel.x1 + victim_width),
+            victim_panel.y2,
+        )
+
+        return [
+            ("K", killer),
+            ("V", victim),
+        ]
+
+    def _draw_hero_boxes(
+        self,
+        output,
+        row,
+        origin_x,
+        origin_y,
+        thickness=2,
+    ):
+        if not self.cfg.get(
+            "draw_hero_icon_boxes",
+            True,
+        ):
+            return
+
+        for label, (x1, y1, x2, y2) in self._hero_icon_boxes(row):
+            ax1 = origin_x + x1
+            ay1 = origin_y + y1
+            ax2 = origin_x + x2
+            ay2 = origin_y + y2
+
+            cv2.rectangle(
+                output,
+                (ax1, ay1),
+                (ax2, ay2),
+                (0, 255, 255),
+                thickness,
+            )
+            cv2.putText(
+                output,
+                label,
+                (ax1, max(14, ay1 - 3)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
     def _event_banner_active(self):
         seconds = float(
             self.cfg.get("show_event_banner_seconds", 2.25)
@@ -110,6 +199,14 @@ class DebugView:
                     (box.x2, box.y2),
                     (0, 255, 0),
                     3,
+                )
+
+                self._draw_hero_boxes(
+                    output,
+                    row,
+                    row.bbox_game.x1,
+                    row.bbox_game.y1,
+                    thickness=2,
                 )
 
         confirmed = sum(
@@ -214,6 +311,14 @@ class DebugView:
                     (0, 255, 0),
                     1,
                     cv2.LINE_AA,
+                )
+
+                self._draw_hero_boxes(
+                    output,
+                    row,
+                    row.bbox_roi.x1,
+                    row.bbox_roi.y1,
+                    thickness=1,
                 )
 
         for track in active_tracks:
