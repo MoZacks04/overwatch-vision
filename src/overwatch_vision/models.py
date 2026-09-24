@@ -46,6 +46,20 @@ class KillFeedRow:
     fingerprint: np.ndarray
     component_boxes_local: list[Rect] = field(default_factory=list)
     component_teams_local: list[str] = field(default_factory=list)
+
+    # Explicit geometry for the two nameplates chosen as this row. Keeping
+    # these separate from generic color components prevents background color
+    # blobs from expanding the row or shifting hero crops.
+    killer_panel_local: Optional[Rect] = None
+    victim_panel_local: Optional[Rect] = None
+    killer_team_hint: Optional[str] = None
+    victim_team_hint: Optional[str] = None
+
+    # Exact portrait boxes used by BOTH debug drawing and parsing. This keeps
+    # the yellow boxes and recognizer input perfectly aligned.
+    killer_hero_box_local: Optional[Rect] = None
+    victim_hero_box_local: Optional[Rect] = None
+
     score: float = 0.0
 
 
