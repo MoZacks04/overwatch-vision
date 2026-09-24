@@ -126,10 +126,30 @@ def make_preview(
     current: int,
     total: int,
 ) -> np.ndarray:
+    """
+    Build a fixed-size labeling UI so instructions never get clipped just
+    because the source crop is narrow.
+    """
     height, width = image.shape[:2]
 
-    target_long_side = 620
-    scale = max(4.0, min(12.0, target_long_side / max(height, width)))
+    canvas_w = 900
+    canvas_h = 700
+    header_h = 125
+    footer_h = 120
+    image_area_h = canvas_h - header_h - footer_h
+    image_area_w = canvas_w - 80
+
+    scale = min(
+        12.0,
+        max(
+            2.0,
+            min(
+                image_area_w / max(1, width),
+                image_area_h / max(1, height),
+            ),
+        ),
+    )
+
     enlarged = cv2.resize(
         image,
         None,
@@ -138,56 +158,84 @@ def make_preview(
         interpolation=cv2.INTER_NEAREST,
     )
 
-    top = 105
-    bottom = 90
-    canvas = cv2.copyMakeBorder(
-        enlarged,
-        top,
-        bottom,
-        20,
-        20,
-        cv2.BORDER_CONSTANT,
-        value=(20, 20, 20),
+    canvas = np.full(
+        (canvas_h, canvas_w, 3),
+        28,
+        dtype=np.uint8,
     )
 
+    # Header
     cv2.putText(
         canvas,
         f"Sample {current}/{total}",
-        (20, 28),
+        (24, 32),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
+        0.72,
         (255, 255, 255),
-        1,
+        2,
         cv2.LINE_AA,
     )
+
+    # Split long filenames over two lines instead of letting them run off-screen.
+    max_chars = 82
+    filename_lines = [
+        filename[i:i + max_chars]
+        for i in range(0, len(filename), max_chars)
+    ][:2]
+
+    y = 60
+    for line in filename_lines:
+        cv2.putText(
+            canvas,
+            line,
+            (24, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (205, 205, 205),
+            1,
+            cv2.LINE_AA,
+        )
+        y += 22
+
     cv2.putText(
         canvas,
-        filename[:90],
-        (20, 56),
+        "Type hero name, then press ENTER to save.",
+        (24, 108),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.46,
-        (200, 200, 200),
-        1,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        canvas,
-        "Type hero name, ENTER = save | empty ENTER = skip | ESC = quit",
-        (20, 84),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.48,
+        0.53,
         (255, 255, 255),
         1,
         cv2.LINE_AA,
     )
 
-    prompt_y = canvas.shape[0] - 48
+    # Center the enlarged crop in a dedicated image area.
+    img_h, img_w = enlarged.shape[:2]
+    image_x = max(20, (canvas_w - img_w) // 2)
+    image_y = header_h + max(0, (image_area_h - img_h) // 2)
+
+    x2 = min(canvas_w, image_x + img_w)
+    y2 = min(header_h + image_area_h, image_y + img_h)
+    canvas[image_y:y2, image_x:x2] = enlarged[
+        : y2 - image_y,
+        : x2 - image_x,
+    ]
+
+    # Footer / controls
+    footer_y = canvas_h - footer_h
+    cv2.line(
+        canvas,
+        (0, footer_y),
+        (canvas_w, footer_y),
+        (70, 70, 70),
+        1,
+    )
+
     cv2.putText(
         canvas,
         "Hero:",
-        (20, prompt_y),
+        (24, footer_y + 42),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
+        0.78,
         (255, 255, 255),
         2,
         cv2.LINE_AA,
@@ -195,20 +243,31 @@ def make_preview(
     cv2.putText(
         canvas,
         typed_label,
-        (90, prompt_y),
+        (112, footer_y + 42),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
+        0.78,
         (255, 255, 255),
         2,
         cv2.LINE_AA,
     )
+
     cv2.putText(
         canvas,
-        "Backspace edits. Progress is saved after every image.",
-        (20, canvas.shape[0] - 17),
+        "ENTER with no name = skip    |    BACKSPACE = edit    |    ESC = quit",
+        (24, footer_y + 76),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.43,
-        (185, 185, 185),
+        0.49,
+        (215, 215, 215),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Progress is saved after every image.",
+        (24, footer_y + 101),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (170, 170, 170),
         1,
         cv2.LINE_AA,
     )
@@ -341,7 +400,7 @@ def main() -> None:
         print("Nothing left to label in this run.")
         return
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)\n    cv2.resizeWindow(WINDOW_NAME, 900, 700)
 
     processed = 0
     try:
