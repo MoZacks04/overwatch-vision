@@ -158,8 +158,27 @@ class KillFeedRowDetector:
         h, w = mask.shape[:2]
         roi_area = float(h * w)
 
+        # Ignore the far-left strip before connected-component analysis.
+        # Real feed rows never begin there, and clipping it first prevents a
+        # same-colored map surface from becoming physically connected to an
+        # otherwise valid HUD nameplate.
+        scan_mask = mask.copy()
+        scan_left = int(
+            round(
+                w
+                * float(
+                    self.cfg.get(
+                        "panel_scan_left_fraction",
+                        0.10,
+                    )
+                )
+            )
+        )
+        if scan_left > 0:
+            scan_mask[:, :scan_left] = 0
+
         contours, _ = cv2.findContours(
-            mask,
+            scan_mask,
             cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE,
         )
