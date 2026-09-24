@@ -390,11 +390,20 @@ def main():
                         )
                         continue
 
-                    row = killfeed.get_track_row(
-                        event.track_id
+                    consensus_frames = int(
+                        parse_cfg.get(
+                            "hero_consensus_frames",
+                            5,
+                        )
+                    )
+                    rows_for_parse = (
+                        killfeed.get_track_rows(
+                            event.track_id,
+                            consensus_frames,
+                        )
                     )
 
-                    if row is None:
+                    if not rows_for_parse:
                         print(
                             "[killfeed] track disappeared before "
                             f"parse queue: {event.track_id}"
@@ -403,7 +412,7 @@ def main():
 
                     parser_worker.submit(
                         event,
-                        row,
+                        rows_for_parse,
                     )
 
             # Parsed results are drained without waiting. If EasyOCR takes
