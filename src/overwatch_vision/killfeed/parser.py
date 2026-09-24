@@ -60,9 +60,6 @@ class KillFeedParser:
         self.min_name_confidence = float(
             self.cfg.get("min_name_confidence", 0.55)
         )
-        self.save_hero_crops = bool(
-            self.cfg.get("save_hero_crops", True)
-        )
 
         project_root = Path(__file__).resolve().parents[3]
         relative = str(
@@ -72,15 +69,6 @@ class KillFeedParser:
             )
         )
         self.review_dir = project_root / relative
-        self.hero_crop_dir = (
-            project_root
-            / str(
-                self.cfg.get(
-                    "hero_crop_directory",
-                    "debug_frames/hero_crops",
-                )
-            )
-        )
 
     def warmup_async(self):
         self.hero_recognizer.warmup_async()
@@ -115,7 +103,8 @@ class KillFeedParser:
 
         return cleaned
 
-    def _team_from_panel(self, panel: np.ndarray) -> str | None:
+    @staticmethod
+    def _team_from_panel(panel: np.ndarray) -> str | None:
         if panel is None or panel.size == 0:
             return None
 
@@ -145,27 +134,10 @@ class KillFeedParser:
             )
         )
 
-        min_fraction = float(
-            self.cfg.get("team_min_fraction", 0.22)
-        )
-        min_margin = float(
-            self.cfg.get("team_min_margin", 0.10)
-        )
-
-        margin = abs(red_fraction - blue_fraction)
-        if margin < min_margin:
-            return None
-
-        if (
-            red_fraction > blue_fraction
-            and red_fraction >= min_fraction
-        ):
+        if red_fraction > blue_fraction and red_fraction >= 0.15:
             return "red"
 
-        if (
-            blue_fraction > red_fraction
-            and blue_fraction >= min_fraction
-        ):
+        if blue_fraction >= red_fraction and blue_fraction >= 0.15:
             return "blue"
 
         return None
@@ -195,45 +167,76 @@ class KillFeedParser:
             empty = np.zeros((1, 1, 3), dtype=np.uint8)
             return panel, empty, empty
 
-        # In a normal kill-feed row, the killer portrait is the square at
-        # the RIGHT edge of the killer-colored nameplate and the victim
-        # portrait is the square at the LEFT edge of the victim-colored
-        # nameplate. The action/weapon icon lives between the two nameplates,
-        # not inside either colored panel.
-        hero_width_rows = float(
-            self.cfg.get("hero_width_rows", 0.98)
-        )
-        icon_width = int(
-            round(ph * hero_width_rows)
-        )
-        icon_width = max(
-            1,
-            min(pw, icon_width),
-        )
-
-        inset_y = max(0, int(ph * 0.04))
+        # Overwatch's kill-feed layout is asymmetric:
+        #
+        #   killer name | killer portrait | action slot | victim portrait | victim name
+        #
+        # The colored contour for the killer side often extends through the
+        # action slot, so "take the final square of the killer panel" actually
+        # crops the weapon/action icon instead of the hero. Use row-height
+        # geometry to step one icon-width left of the action slot.
+        inset_y = max(0, int(ph * 0.05))
         y1 = inset_y
         y2 = max(y1 + 1, ph - inset_y)
 
         if side == "killer":
-            hero_x1 = max(0, pw - icon_width)
+            start_rows = float(
+                self.cfg.get(
+                    "killer_hero_start_from_right_rows",
+                    2.25,
+                )
+            )
+            end_rows = float(
+                self.cfg.get(
+                    "killer_hero_end_from_right_rows",
+                    1.00,
+                )
+            )
+
+            hero_x1 = int(
+                round(pw - start_rows * ph)
+            )
+            hero_x2 = int(
+                round(pw - end_rows * ph)
+            )
+
+            hero_x1 = max(0, min(pw - 1, hero_x1))
+            hero_x2 = max(
+                hero_x1 + 1,
+                min(pw, hero_x2),
+            )
 
             hero = panel[
                 y1:y2,
-                hero_x1:pw,
+                hero_x1:hero_x2,
             ]
             name = panel[
                 y1:y2,
                 0:max(1, hero_x1),
             ]
         else:
+            hero_rows = float(
+                self.cfg.get(
+                    "victim_hero_width_rows",
+                    1.15,
+                )
+            )
+
+            hero_x2 = int(
+                round(hero_rows * ph)
+            )
+            hero_x2 = max(
+                1,
+                min(pw, hero_x2),
+            )
+
             hero = panel[
                 y1:y2,
-                0:icon_width,
+                0:hero_x2,
             ]
             name = panel[
                 y1:y2,
-                min(pw, icon_width):pw,
+                hero_x2:pw,
             ]
 
         return panel, name, hero
@@ -252,44 +255,6 @@ class KillFeedParser:
             return None, confidence
 
         return self._clean_name(text), confidence
-
-    def _save_hero_crop(
-        self,
-        image: np.ndarray,
-        side: str,
-        hero: str | None,
-        confidence: float,
-        team: str | None,
-    ):
-        if (
-            not self.save_hero_crops
-            or image is None
-            or image.size == 0
-        ):
-            return
-
-        # Keep the useful failures plus borderline successes so future tuning
-        # is based on the exact pixels the recognizer actually saw.
-        if hero is not None and confidence >= 0.82:
-            return
-
-        try:
-            self.hero_crop_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-            label = hero or "unknown"
-            filename = (
-                f"{int(time.time() * 1000)}"
-                f"_{side}_{team or 'unknown'}"
-                f"_{label}_{confidence:.2f}.png"
-            )
-            cv2.imwrite(
-                str(self.hero_crop_dir / filename),
-                image,
-            )
-        except Exception:
-            pass
 
     def _save_review_crop(
         self,
@@ -380,21 +345,6 @@ class KillFeedParser:
             self.hero_recognizer.recognize(
                 victim_hero_crop
             )
-        )
-
-        self._save_hero_crop(
-            killer_hero_crop,
-            "killer",
-            killer_hero,
-            killer_hero_conf,
-            killer_team,
-        )
-        self._save_hero_crop(
-            victim_hero_crop,
-            "victim",
-            victim_hero,
-            victim_hero_conf,
-            victim_team,
         )
 
         confidence_values = [
