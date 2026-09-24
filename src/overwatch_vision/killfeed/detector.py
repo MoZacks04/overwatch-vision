@@ -87,6 +87,9 @@ class KillFeedDetector:
                 self._component_to_local(component, box)
                 for component in candidate.component_boxes
             ]
+            local_teams = list(
+                candidate.component_teams
+            )
 
             rows.append(
                 KillFeedRow(
@@ -100,6 +103,7 @@ class KillFeedDetector:
                     normalized=normalized,
                     fingerprint=fingerprint,
                     component_boxes_local=local_components,
+                    component_teams_local=local_teams,
                     score=candidate.score,
                 )
             )
