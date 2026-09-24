@@ -85,6 +85,13 @@ killfeed_parse:
   hero_refine_search_y_rows: 0.10
   hero_refine_step_rows: 0.06
 
+  # Hero identity is accepted only after the same prediction wins across
+  # several consecutive snapshots of the SAME tracked kill-feed row.
+  hero_consensus_frames: 5
+  hero_consensus_min_votes: 3
+  hero_consensus_min_fraction: 0.60
+  hero_consensus_min_average_confidence: 0.78
+
   # Do not accept arbitrary OCR guesses for player handles.
   min_name_confidence: 0.55
 
@@ -130,19 +137,22 @@ hero_recognition:
 
   # Hero names are only spoken when the match is both strong and clearly
   # better than the runner-up. False negatives are preferable to false calls.
-  min_confidence: 0.72
-  min_margin: 0.06
+  min_confidence: 0.82
+  min_margin: 0.10
   min_gray_stddev: 16.0
   debug_rejections: true
 
   # Exact in-game kill-feed crops labeled with label_hero_samples.py are
   # preferred over the generic downloaded portrait references.
   local_template_directory: ".cache/killfeed_hero_templates"
-  local_min_confidence: 0.76
-  local_min_margin: 0.05
+  local_min_confidence: 0.78
+  local_min_margin: 0.06
 
 tracking:
-  confirmation_frames: 3
+  # At ~10 Hz kill-feed analysis, five confirmations add about 0.5 s latency
+  # but give the hero recognizer several clean frames before one spoken call.
+  confirmation_frames: 5
+  history_frames: 6
   missing_frames_before_expire: 18
   max_vertical_shift_fraction: 0.18
   fingerprint_size: 16
