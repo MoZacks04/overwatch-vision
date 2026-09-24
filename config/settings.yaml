@@ -11,11 +11,14 @@ performance:
   parser_results_per_frame: 8
 
 killfeed:
+  # Tight top-right ROI. Based on the captured matches, the kill feed never
+  # needs the old 38% screen-width search. This trims background pixels before
+  # any row detection or hero work happens.
   search_region:
-    left: 0.62
-    top: 0.060
+    left: 0.68
+    top: 0.045
     right: 0.995
-    bottom: 0.220
+    bottom: 0.205
 
   color_panels:
     red:
@@ -128,6 +131,19 @@ ocr:
   # EasyOCR is only used for player names. Limiting PyTorch threads stops
   # occasional OCR jobs from monopolizing the CPU.
   cpu_threads: 2
+
+hero_classifier:
+  # Once train_hero_classifier.py creates these files, the runtime prefers
+  # this kill-feed-specific CNN over generic portrait similarity.
+  enabled: true
+  model_path: "models/killfeed_hero_classifier.pt"
+  labels_path: "models/killfeed_hero_classifier_labels.json"
+  input_size: 64
+
+  # Be conservative: an uncertain classifier result becomes "unknown" rather
+  # than a confidently wrong spoken hero name.
+  min_confidence: 0.86
+  min_margin: 0.14
 
 hero_recognition:
   enabled: true
