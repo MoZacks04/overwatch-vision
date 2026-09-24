@@ -10,6 +10,7 @@ from overwatch_vision.models import Rect
 class PanelComponent:
     bbox: Rect
     team: str
+    fill_ratio: float
 
 
 @dataclass(slots=True)
@@ -17,16 +18,28 @@ class RowCandidate:
     bbox: Rect
     component_boxes: list[Rect]
     component_teams: list[str]
+    killer_panel: Rect
+    victim_panel: Rect
+    killer_team: str
+    victim_team: str
     score: float
 
 
 class KillFeedRowDetector:
     """
-    Detect kill-feed rows from the colored Overwatch nameplates.
+    Detect kill-feed rows as a PAIR of opposite-team nameplates.
 
-    Red and blue masks are kept separate all the way through detection so
-    downstream parsing does not have to guess a panel's team from hero art or
-    text pixels.
+    Earlier versions grouped every red/blue component at a similar Y value.
+    That let red/blue map geometry get absorbed into the same group and pull
+    the green row box far to the left. This detector only accepts one red and
+    one blue HUD panel that:
+      - line up vertically,
+      - have similar heights,
+      - sit a plausible distance apart,
+      - form a plausible total row width,
+      - and end near the right edge of the kill-feed ROI.
+
+    Only the winning two panels define the row rectangle.
     """
 
     def __init__(self, config):
@@ -98,35 +111,47 @@ class KillFeedRowDetector:
             ),
         )
 
+        # Small horizontal closing reconnects team-color regions interrupted
+        # by bright text/portrait details, but is intentionally too small to
+        # bridge separate map objects.
+        close_w = max(
+            3,
+            int(
+                round(
+                    roi.shape[1]
+                    * float(
+                        self.cfg.get(
+                            "panel_close_width_fraction",
+                            0.006,
+                        )
+                    )
+                )
+            ),
+        )
+        close_h = max(2, int(round(roi.shape[0] * 0.015)))
+
         kernel_open = np.ones((2, 2), np.uint8)
-        kernel_close = np.ones((5, 3), np.uint8)
-
-        red_mask = cv2.morphologyEx(
-            red_mask,
-            cv2.MORPH_OPEN,
-            kernel_open,
-        )
-        red_mask = cv2.morphologyEx(
-            red_mask,
-            cv2.MORPH_CLOSE,
-            kernel_close,
+        kernel_close = np.ones(
+            (close_h, close_w),
+            np.uint8,
         )
 
-        blue_mask = cv2.morphologyEx(
-            blue_mask,
-            cv2.MORPH_OPEN,
-            kernel_open,
-        )
-        blue_mask = cv2.morphologyEx(
-            blue_mask,
-            cv2.MORPH_CLOSE,
-            kernel_close,
-        )
+        def clean(mask):
+            mask = cv2.morphologyEx(
+                mask,
+                cv2.MORPH_OPEN,
+                kernel_open,
+            )
+            return cv2.morphologyEx(
+                mask,
+                cv2.MORPH_CLOSE,
+                kernel_close,
+            )
 
-        combined = cv2.bitwise_or(
-            red_mask,
-            blue_mask,
-        )
+        red_mask = clean(red_mask)
+        blue_mask = clean(blue_mask)
+        combined = cv2.bitwise_or(red_mask, blue_mask)
+
         return red_mask, blue_mask, combined
 
     def _find_panel_components(self, mask, team):
@@ -148,6 +173,12 @@ class KillFeedRowDetector:
         min_w = w * float(
             self.cfg["min_panel_width_fraction"]
         )
+        max_w = w * float(
+            self.cfg.get(
+                "max_panel_width_fraction",
+                0.48,
+            )
+        )
         min_h = h * float(
             self.cfg["min_panel_height_fraction"]
         )
@@ -156,6 +187,12 @@ class KillFeedRowDetector:
         )
         min_aspect = float(
             self.cfg["min_panel_aspect_ratio"]
+        )
+        max_aspect = float(
+            self.cfg.get(
+                "max_panel_aspect_ratio",
+                12.0,
+            )
         )
         min_fill = float(
             self.cfg["min_panel_fill_ratio"]
@@ -171,14 +208,21 @@ class KillFeedRowDetector:
 
             x, y, bw, bh = cv2.boundingRect(contour)
 
-            if bw < min_w or not (min_h <= bh <= max_h):
+            if not (min_w <= bw <= max_w):
+                continue
+
+            if not (min_h <= bh <= max_h):
                 continue
 
             aspect = bw / max(1.0, float(bh))
-            if aspect < min_aspect:
+            if not (min_aspect <= aspect <= max_aspect):
                 continue
 
-            fill_ratio = area / max(1.0, float(bw * bh))
+            fill_ratio = area / max(
+                1.0,
+                float(bw * bh),
+            )
+
             if fill_ratio < min_fill:
                 continue
 
@@ -191,149 +235,355 @@ class KillFeedRowDetector:
                         y2=y + bh,
                     ),
                     team=team,
+                    fill_ratio=fill_ratio,
                 )
             )
 
         return components
 
-    def _group_components(self, components, roi_height):
-        tolerance = roi_height * float(
-            self.cfg["row_group_y_tolerance_fraction"]
+    @staticmethod
+    def _vertical_overlap(a: Rect, b: Rect) -> float:
+        overlap = max(
+            0,
+            min(a.y2, b.y2) - max(a.y1, b.y1),
+        )
+        return overlap / max(
+            1.0,
+            float(min(a.height, b.height)),
         )
 
-        groups = []
+    def _pair_candidate(self, a, b, roi_w, roi_h):
+        if a.team == b.team:
+            return None
 
-        for component in components:
-            best_group = None
-            best_distance = float("inf")
+        left, right = (
+            (a, b)
+            if a.bbox.cx <= b.bbox.cx
+            else (b, a)
+        )
 
-            for group in groups:
-                mean_y = sum(
-                    item.bbox.cy
-                    for item in group
-                ) / len(group)
+        # The two nameplates should be distinct horizontal objects.
+        if right.bbox.cx <= left.bbox.cx:
+            return None
 
+        avg_h = (
+            left.bbox.height + right.bbox.height
+        ) / 2.0
+
+        if avg_h <= 1:
+            return None
+
+        height_ratio = (
+            min(left.bbox.height, right.bbox.height)
+            / max(
+                1.0,
+                float(
+                    max(
+                        left.bbox.height,
+                        right.bbox.height,
+                    )
+                ),
+            )
+        )
+
+        min_height_ratio = float(
+            self.cfg.get(
+                "pair_min_height_ratio",
+                0.68,
+            )
+        )
+        if height_ratio < min_height_ratio:
+            return None
+
+        y_delta_rows = abs(
+            left.bbox.cy - right.bbox.cy
+        ) / avg_h
+
+        max_y_delta_rows = float(
+            self.cfg.get(
+                "pair_max_center_y_delta_rows",
+                0.42,
+            )
+        )
+        if y_delta_rows > max_y_delta_rows:
+            return None
+
+        overlap = self._vertical_overlap(
+            left.bbox,
+            right.bbox,
+        )
+        min_overlap = float(
+            self.cfg.get(
+                "pair_min_vertical_overlap",
+                0.58,
+            )
+        )
+        if overlap < min_overlap:
+            return None
+
+        gap = right.bbox.x1 - left.bbox.x2
+        gap_rows = gap / avg_h
+
+        min_gap_rows = float(
+            self.cfg.get(
+                "pair_min_gap_rows",
+                -0.30,
+            )
+        )
+        max_gap_rows = float(
+            self.cfg.get(
+                "pair_max_gap_rows",
+                3.40,
+            )
+        )
+
+        if not (
+            min_gap_rows
+            <= gap_rows
+            <= max_gap_rows
+        ):
+            return None
+
+        row_x1 = min(
+            left.bbox.x1,
+            right.bbox.x1,
+        )
+        row_x2 = max(
+            left.bbox.x2,
+            right.bbox.x2,
+        )
+        row_width = row_x2 - row_x1
+
+        min_row_width = roi_w * float(
+            self.cfg["min_row_width_fraction"]
+        )
+        max_row_width = roi_w * float(
+            self.cfg.get(
+                "max_row_width_fraction",
+                0.82,
+            )
+        )
+
+        if not (
+            min_row_width
+            <= row_width
+            <= max_row_width
+        ):
+            return None
+
+        right_gap = roi_w - row_x2
+        max_right_gap = roi_w * float(
+            self.cfg["max_right_gap_fraction"]
+        )
+
+        if right_gap > max_right_gap:
+            return None
+
+        # Favor the geometry that real kill-feed rows have: near-perfect Y
+        # alignment, similar panel heights, tight right anchoring, and dense
+        # rectangular team-color panels.
+        right_anchor_score = 1.0 - min(
+            1.0,
+            right_gap / max(1.0, max_right_gap),
+        )
+        y_score = 1.0 - min(
+            1.0,
+            y_delta_rows / max(
+                0.01,
+                max_y_delta_rows,
+            ),
+        )
+        gap_score = 1.0 - min(
+            1.0,
+            abs(gap_rows - 1.10) / 2.60,
+        )
+        fill_score = min(
+            1.0,
+            (
+                left.fill_ratio
+                + right.fill_ratio
+            ) / 1.45,
+        )
+
+        score = (
+            0.34 * right_anchor_score
+            + 0.24 * y_score
+            + 0.18 * height_ratio
+            + 0.12 * gap_score
+            + 0.12 * fill_score
+        )
+
+        pad_x = max(
+            2,
+            int(
+                round(
+                    avg_h
+                    * float(
+                        self.cfg.get(
+                            "row_padding_x_rows",
+                            0.08,
+                        )
+                    )
+                )
+            ),
+        )
+        pad_y = max(
+            1,
+            int(
+                round(
+                    avg_h
+                    * float(
+                        self.cfg.get(
+                            "row_padding_y_rows",
+                            0.08,
+                        )
+                    )
+                )
+            ),
+        )
+
+        row = Rect(
+            max(0, row_x1 - pad_x),
+            max(
+                0,
+                min(
+                    left.bbox.y1,
+                    right.bbox.y1,
+                ) - pad_y,
+            ),
+            min(
+                roi_w,
+                row_x2 + pad_x,
+            ),
+            min(
+                roi_h,
+                max(
+                    left.bbox.y2,
+                    right.bbox.y2,
+                ) + pad_y,
+            ),
+        )
+
+        return RowCandidate(
+            bbox=row,
+            component_boxes=[
+                left.bbox,
+                right.bbox,
+            ],
+            component_teams=[
+                left.team,
+                right.team,
+            ],
+            killer_panel=left.bbox,
+            victim_panel=right.bbox,
+            killer_team=left.team,
+            victim_team=right.team,
+            score=score,
+        )
+
+    def _select_non_overlapping_rows(self, candidates):
+        # When a map object creates a second possible pair at the same Y,
+        # retain only the best-scoring interpretation of that row.
+        candidates = sorted(
+            candidates,
+            key=lambda item: item.score,
+            reverse=True,
+        )
+
+        selected = []
+
+        center_separation_rows = float(
+            self.cfg.get(
+                "row_suppression_center_distance_rows",
+                0.62,
+            )
+        )
+
+        for candidate in candidates:
+            candidate_h = max(
+                1.0,
+                float(candidate.bbox.height),
+            )
+
+            conflict = False
+
+            for existing in selected:
+                existing_h = max(
+                    1.0,
+                    float(existing.bbox.height),
+                )
                 distance = abs(
-                    component.bbox.cy - mean_y
+                    candidate.bbox.cy
+                    - existing.bbox.cy
+                )
+                threshold = (
+                    min(candidate_h, existing_h)
+                    * center_separation_rows
                 )
 
-                if (
-                    distance <= tolerance
-                    and distance < best_distance
-                ):
-                    best_group = group
-                    best_distance = distance
+                if distance < threshold:
+                    conflict = True
+                    break
 
-            if best_group is None:
-                groups.append([component])
-            else:
-                best_group.append(component)
+            if not conflict:
+                selected.append(candidate)
 
-        return groups
+        selected.sort(
+            key=lambda item: item.bbox.y1
+        )
+        return selected
 
     def detect(self, roi):
         if roi.size == 0:
-            return [], np.zeros((1, 1), dtype=np.uint8), []
+            return (
+                [],
+                np.zeros((1, 1), dtype=np.uint8),
+                [],
+            )
 
         h, w = roi.shape[:2]
 
-        red_mask, blue_mask, combined = self._panel_masks(roi)
-
-        components = (
-            self._find_panel_components(red_mask, "red")
-            + self._find_panel_components(blue_mask, "blue")
+        red_mask, blue_mask, combined = (
+            self._panel_masks(roi)
         )
-        components.sort(key=lambda item: item.bbox.cy)
 
-        groups = self._group_components(
-            components,
-            h,
+        red_components = self._find_panel_components(
+            red_mask,
+            "red",
+        )
+        blue_components = self._find_panel_components(
+            blue_mask,
+            "blue",
         )
 
         candidates = []
 
-        min_components = int(
-            self.cfg.get("min_components_per_row", 2)
-        )
-        min_row_width = w * float(
-            self.cfg["min_row_width_fraction"]
-        )
-        max_right_gap = w * float(
-            self.cfg["max_right_gap_fraction"]
-        )
-
-        for group in groups:
-            if len(group) < min_components:
-                continue
-
-            group.sort(key=lambda item: item.bbox.cx)
-            boxes = [
-                item.bbox
-                for item in group
-            ]
-            teams = [
-                item.team
-                for item in group
-            ]
-
-            x1 = min(r.x1 for r in boxes)
-            y1 = min(r.y1 for r in boxes)
-            x2 = max(r.x2 for r in boxes)
-            y2 = max(r.y2 for r in boxes)
-
-            pad_x = max(4, int(0.015 * w))
-            pad_y = max(2, int(0.025 * h))
-
-            row = Rect(
-                max(0, x1 - pad_x),
-                max(0, y1 - pad_y),
-                min(w, x2 + pad_x),
-                min(h, y2 + pad_y),
-            )
-
-            if row.width < min_row_width:
-                continue
-
-            right_gap = w - row.x2
-            if right_gap > max_right_gap:
-                continue
-
-            right_anchor_score = 1.0 - min(
-                1.0,
-                right_gap / max(1.0, max_right_gap),
-            )
-
-            width_score = min(
-                1.0,
-                row.width / max(1.0, w * 0.45),
-            )
-
-            component_score = min(
-                1.0,
-                len(group) / 2.0,
-            )
-
-            score = (
-                0.45 * right_anchor_score
-                + 0.30 * width_score
-                + 0.25 * component_score
-            )
-
-            candidates.append(
-                RowCandidate(
-                    bbox=row,
-                    component_boxes=boxes,
-                    component_teams=teams,
-                    score=score,
+        for red_component in red_components:
+            for blue_component in blue_components:
+                candidate = self._pair_candidate(
+                    red_component,
+                    blue_component,
+                    w,
+                    h,
                 )
-            )
 
-        candidates.sort(
-            key=lambda c: c.bbox.y1
+                if candidate is not None:
+                    candidates.append(candidate)
+
+        candidates = self._select_non_overlapping_rows(
+            candidates
         )
+
+        debug_components = [
+            item.bbox
+            for item in (
+                red_components
+                + blue_components
+            )
+        ]
 
         return (
             candidates,
             combined,
-            [item.bbox for item in components],
+            debug_components,
         )
