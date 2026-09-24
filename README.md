@@ -170,3 +170,55 @@ current parse-queue length so backlog is visible while testing.
 
 These rates can be changed under `performance:` in
 `config/settings.yaml`.
+
+
+## Kill-feed V3 training workflow
+
+The project now supports a staged path away from generic color/portrait guessing:
+
+1. The live detector searches only a tight normalized top-right kill-feed ROI.
+2. Each confirmed row produces exact killer/victim portrait crops.
+3. `label_hero_samples.py` turns those real in-game crops into labeled hero
+   examples under `.cache/killfeed_hero_templates/`.
+4. `train_hero_classifier.py` trains a tiny 64x64 CNN on those exact kill-feed
+   portraits and exports a TorchScript model under `models/`.
+5. At runtime, the trained classifier is preferred. If it is uncertain or no
+   model exists yet, the conservative template/generic recognizer remains as a
+   fallback.
+6. Hero identity still requires multi-frame consensus before a spoken call, and
+   parsed events still pass through the 10-second semantic duplicate guard.
+
+### Collecting row examples
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe .\collect_killfeed_training_data.py
+```
+
+Controls:
+- `S` saves the current tight kill-feed ROI.
+- `A` toggles auto-save while row candidates are visible.
+- `Q` quits.
+
+The collector stores the raw ROI plus current weak row labels under
+`datasets/killfeed_rows/raw/`. These examples can later be manually reviewed
+and used to train a one-class row detector if geometry-based detection still
+produces false positives.
+
+### Training hero identity
+
+After normal play has produced samples under `debug_frames/hero_samples/`:
+
+```powershell
+.\.venv\Scripts\python.exe .\label_hero_samples.py
+```
+
+Label clean hero portraits, then train:
+
+```powershell
+.\.venv\Scripts\python.exe .\train_hero_classifier.py
+```
+
+Restart Overwatch Vision after training. If the model files exist, the runtime
+loads them automatically.
