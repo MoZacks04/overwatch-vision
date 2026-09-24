@@ -63,6 +63,27 @@ class KillFeedParser:
         self.capture_hero_samples = bool(
             self.cfg.get("capture_hero_samples", True)
         )
+        self.hero_consensus_min_votes = max(
+            1,
+            int(
+                self.cfg.get(
+                    "hero_consensus_min_votes",
+                    3,
+                )
+            ),
+        )
+        self.hero_consensus_min_fraction = float(
+            self.cfg.get(
+                "hero_consensus_min_fraction",
+                0.60,
+            )
+        )
+        self.hero_consensus_min_average = float(
+            self.cfg.get(
+                "hero_consensus_min_average_confidence",
+                0.78,
+            )
+        )
 
         project_root = Path(__file__).resolve().parents[3]
         relative = str(
@@ -398,6 +419,182 @@ class KillFeedParser:
             )
         except Exception:
             pass
+
+    def _hero_crops_for_row(
+        self,
+        row,
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        components = self._local_components(row)
+
+        if len(components) < 2:
+            return None, None
+
+        fallback_killer_box, _ = components[0]
+        fallback_victim_box, _ = components[-1]
+
+        killer_box = (
+            row.killer_panel_local
+            if row.killer_panel_local is not None
+            else fallback_killer_box
+        )
+        victim_box = (
+            row.victim_panel_local
+            if row.victim_panel_local is not None
+            else fallback_victim_box
+        )
+
+        _, _, killer_hero_crop = self._party_crops(
+            row.crop,
+            killer_box,
+            "killer",
+            row.killer_hero_box_local,
+        )
+        _, _, victim_hero_crop = self._party_crops(
+            row.crop,
+            victim_box,
+            "victim",
+            row.victim_hero_box_local,
+        )
+
+        return killer_hero_crop, victim_hero_crop
+
+    def _hero_consensus(
+        self,
+        votes: list[tuple[str | None, float]],
+        sample_count: int,
+    ) -> tuple[str | None, float]:
+        grouped = {}
+
+        for hero, confidence in votes:
+            if not hero:
+                continue
+
+            bucket = grouped.setdefault(
+                hero,
+                [],
+            )
+            bucket.append(float(confidence))
+
+        if not grouped:
+            return None, 0.0
+
+        ranked = sorted(
+            grouped.items(),
+            key=lambda item: (
+                len(item[1]),
+                sum(item[1]) / len(item[1]),
+            ),
+            reverse=True,
+        )
+
+        hero, scores = ranked[0]
+        vote_count = len(scores)
+        fraction = (
+            vote_count / max(1, sample_count)
+        )
+        average = sum(scores) / vote_count
+
+        if vote_count < self.hero_consensus_min_votes:
+            return None, average
+
+        if fraction < self.hero_consensus_min_fraction:
+            return None, average
+
+        if average < self.hero_consensus_min_average:
+            return None, average
+
+        return hero, average
+
+    def parse_consensus(
+        self,
+        rows,
+    ) -> ParsedKillFeedRow:
+        rows = list(rows)
+
+        if not rows:
+            return ParsedKillFeedRow(
+                confidence=0.0,
+            )
+
+        # OCR and team parsing only run once on the newest/best-aligned row.
+        parsed = self.parse(rows[-1])
+
+        killer_votes = []
+        victim_votes = []
+
+        # Include the newest row's already-computed recognition result.
+        if parsed.killer_hero:
+            killer_votes.append(
+                (
+                    parsed.killer_hero,
+                    parsed.killer_hero_confidence,
+                )
+            )
+        if parsed.victim_hero:
+            victim_votes.append(
+                (
+                    parsed.victim_hero,
+                    parsed.victim_hero_confidence,
+                )
+            )
+
+        # Re-check hero identity on prior frames only. Hero matching is cheap
+        # compared with OCR and gives us temporal consensus instead of trusting
+        # one possibly blurred/animated portrait crop.
+        for row in rows[:-1]:
+            killer_crop, victim_crop = (
+                self._hero_crops_for_row(row)
+            )
+
+            if killer_crop is not None:
+                killer_votes.append(
+                    self.hero_recognizer.recognize(
+                        killer_crop
+                    )
+                )
+
+            if victim_crop is not None:
+                victim_votes.append(
+                    self.hero_recognizer.recognize(
+                        victim_crop
+                    )
+                )
+
+        killer_hero, killer_conf = (
+            self._hero_consensus(
+                killer_votes,
+                len(rows),
+            )
+        )
+        victim_hero, victim_conf = (
+            self._hero_consensus(
+                victim_votes,
+                len(rows),
+            )
+        )
+
+        parsed.killer_hero = killer_hero
+        parsed.victim_hero = victim_hero
+        parsed.killer_hero_confidence = killer_conf
+        parsed.victim_hero_confidence = victim_conf
+
+        # Recompute overall confidence after temporal hero consensus.
+        useful = [
+            value
+            for value in (
+                parsed.killer_name_confidence,
+                parsed.victim_name_confidence,
+                killer_conf,
+                victim_conf,
+            )
+            if value > 0
+        ]
+        if useful:
+            parsed.confidence = (
+                sum(useful) / len(useful)
+            )
+
+        return parsed
 
     def parse(self, row) -> ParsedKillFeedRow:
         components = self._local_components(row)
