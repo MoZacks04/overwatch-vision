@@ -83,39 +83,11 @@ def _event_speech(
     friendly_team: str,
     speak_player_names: bool,
 ) -> str | None:
-    # Only make an ally/enemy call when both colored nameplates were
-    # confidently classified and they form a valid opposing-team pair.
-    # If the color read is ambiguous, staying silent is better than saying
-    # the elimination happened in the wrong direction.
-    standard_team_pair = {
-        event.killer_team,
-        event.victim_team,
-    } == {"red", "blue"}
-
-    if not standard_team_pair:
-        if event.killer_hero and event.victim_hero:
-            killer = _spoken_identity(
-                event.killer_hero,
-                event.killer_name,
-                include_player_name=speak_player_names,
-                fallback="killer",
-            )
-            victim = _spoken_identity(
-                event.victim_hero,
-                event.victim_name,
-                include_player_name=speak_player_names,
-                fallback="victim",
-            )
-            return f"{killer} eliminated {victim}."
-
-        return None
-
-    killer_is_friendly = (
-        event.killer_team == friendly_team
-    )
-    victim_is_friendly = (
-        event.victim_team == friendly_team
-    )
+    # Team-side classification is currently much more trustworthy than hero
+    # recognition. Never invent a hero name just because the matcher found a
+    # weak nearest neighbour; fall back to "enemy" / "ally" language.
+    killer_is_friendly = event.killer_team == friendly_team
+    victim_is_friendly = event.victim_team == friendly_team
 
     killer = _spoken_identity(
         event.killer_hero,
@@ -148,7 +120,14 @@ def _event_speech(
             return f"Your ally eliminated enemy {victim}."
         return "Your ally eliminated an enemy."
 
+    if event.killer_hero or event.victim_hero:
+        return f"{killer} eliminated {victim}."
+
+    # If even the team direction is unclear, stay silent rather than adding
+    # a vague second call like "Elimination detected". The terminal still
+    # records the event for debugging.
     return None
+
 
 def main():
     config = _load_config()
