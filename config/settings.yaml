@@ -134,4 +134,10 @@ debug:
   draw_search_region: true
   draw_team_status_region: true
   draw_rows: true
+
+  # Yellow K/V boxes show the exact portrait crops we think belong to the
+  # killer and victim. These are diagnostics so we can calibrate from real
+  # screenshots before trusting hero recognition.
+  draw_hero_icon_boxes: true
+  hero_icon_width_rows: 1.0
   show_event_banner_seconds: 2.25
