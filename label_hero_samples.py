@@ -400,7 +400,8 @@ def main() -> None:
         print("Nothing left to label in this run.")
         return
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)\n    cv2.resizeWindow(WINDOW_NAME, 900, 700)
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW_NAME, 900, 700)
 
     processed = 0
     try:
