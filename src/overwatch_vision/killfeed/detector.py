@@ -51,6 +51,95 @@ class KillFeedDetector:
             y2=max(0, component.y2 - row_box.y1),
         )
 
+    @staticmethod
+    def _clip_rect(rect, width, height):
+        return Rect(
+            x1=max(0, min(width, rect.x1)),
+            y1=max(0, min(height, rect.y1)),
+            x2=max(0, min(width, rect.x2)),
+            y2=max(0, min(height, rect.y2)),
+        )
+
+    def _hero_boxes_from_panels(
+        self,
+        killer_panel,
+        victim_panel,
+        row_width,
+        row_height,
+    ):
+        kcfg = self.config.get("killfeed_parse", {})
+
+        reference_h = max(
+            1.0,
+            (
+                killer_panel.height
+                + victim_panel.height
+            ) / 2.0,
+        )
+
+        size = max(
+            4,
+            int(
+                round(
+                    reference_h
+                    * float(
+                        kcfg.get(
+                            "hero_icon_size_rows",
+                            1.08,
+                        )
+                    )
+                )
+            ),
+        )
+
+        inner_offset = int(
+            round(
+                reference_h
+                * float(
+                    kcfg.get(
+                        "hero_inner_edge_offset_rows",
+                        0.04,
+                    )
+                )
+            )
+        )
+
+        killer_cy = int(round(killer_panel.cy))
+        victim_cy = int(round(victim_panel.cy))
+
+        killer_x2 = killer_panel.x2 + inner_offset
+        killer_x1 = killer_x2 - size
+
+        victim_x1 = victim_panel.x1 - inner_offset
+        victim_x2 = victim_x1 + size
+
+        killer_y1 = killer_cy - size // 2
+        victim_y1 = victim_cy - size // 2
+
+        killer_box = self._clip_rect(
+            Rect(
+                killer_x1,
+                killer_y1,
+                killer_x2,
+                killer_y1 + size,
+            ),
+            row_width,
+            row_height,
+        )
+
+        victim_box = self._clip_rect(
+            Rect(
+                victim_x1,
+                victim_y1,
+                victim_x2,
+                victim_y1 + size,
+            ),
+            row_width,
+            row_height,
+        )
+
+        return killer_box, victim_box
+
     def get_track_row(self, track_id):
         for track in self.tracker.tracks:
             if track.track_id == track_id:
@@ -91,6 +180,24 @@ class KillFeedDetector:
                 candidate.component_teams
             )
 
+            killer_panel_local = self._component_to_local(
+                candidate.killer_panel,
+                box,
+            )
+            victim_panel_local = self._component_to_local(
+                candidate.victim_panel,
+                box,
+            )
+
+            killer_hero_box, victim_hero_box = (
+                self._hero_boxes_from_panels(
+                    killer_panel_local,
+                    victim_panel_local,
+                    crop.shape[1],
+                    crop.shape[0],
+                )
+            )
+
             rows.append(
                 KillFeedRow(
                     bbox_roi=box,
@@ -104,6 +211,12 @@ class KillFeedDetector:
                     fingerprint=fingerprint,
                     component_boxes_local=local_components,
                     component_teams_local=local_teams,
+                    killer_panel_local=killer_panel_local,
+                    victim_panel_local=victim_panel_local,
+                    killer_team_hint=candidate.killer_team,
+                    victim_team_hint=candidate.victim_team,
+                    killer_hero_box_local=killer_hero_box,
+                    victim_hero_box_local=victim_hero_box,
                     score=candidate.score,
                 )
             )
