@@ -354,6 +354,15 @@ class KillFeedRowDetector:
         )
         row_width = row_x2 - row_x1
 
+        min_row_left = roi_w * float(
+            self.cfg.get(
+                "min_row_left_fraction",
+                0.16,
+            )
+        )
+        if row_x1 < min_row_left:
+            return None
+
         min_row_width = roi_w * float(
             self.cfg["min_row_width_fraction"]
         )
