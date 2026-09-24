@@ -58,6 +58,28 @@ class AsyncKillFeedParser:
             component_teams_local=list(
                 row.component_teams_local
             ),
+            killer_panel_local=(
+                cls._copy_rect(row.killer_panel_local)
+                if row.killer_panel_local is not None
+                else None
+            ),
+            victim_panel_local=(
+                cls._copy_rect(row.victim_panel_local)
+                if row.victim_panel_local is not None
+                else None
+            ),
+            killer_team_hint=row.killer_team_hint,
+            victim_team_hint=row.victim_team_hint,
+            killer_hero_box_local=(
+                cls._copy_rect(row.killer_hero_box_local)
+                if row.killer_hero_box_local is not None
+                else None
+            ),
+            victim_hero_box_local=(
+                cls._copy_rect(row.victim_hero_box_local)
+                if row.victim_hero_box_local is not None
+                else None
+            ),
             score=row.score,
         )
 
