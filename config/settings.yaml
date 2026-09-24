@@ -43,6 +43,7 @@ killfeed:
   max_panel_aspect_ratio: 10.0
   min_panel_fill_ratio: 0.54
   panel_close_width_fraction: 0.010
+  panel_scan_left_fraction: 0.10
 
   # A valid elimination row is one red panel + one blue panel with compatible
   # geometry. This is what prevents similarly colored scenery from pulling
