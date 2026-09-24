@@ -411,10 +411,9 @@ class HeroRecognizer:
         if not self.enabled:
             return None, 0.0
 
-        if not self._ready:
-            self.warmup_async()
-            return None, 0.0
-
+        # The trained kill-feed classifier is independent of the generic
+        # reference cache, so try it first. This also lets a locally trained
+        # model work offline or while reference images are still loading.
         trained_name, trained_confidence = (
             self.trained_classifier.recognize(
                 image
@@ -422,6 +421,10 @@ class HeroRecognizer:
         )
         if trained_name is not None:
             return trained_name, trained_confidence
+
+        if not self._ready:
+            self.warmup_async()
+            return None, 0.0
 
         descriptor = self._descriptor(image)
         if descriptor is None:
