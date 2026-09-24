@@ -61,7 +61,7 @@ killfeed:
   min_row_left_fraction: 0.16
   min_row_width_fraction: 0.20
   max_row_width_fraction: 0.78
-  max_right_gap_fraction: 0.12
+  max_right_gap_fraction: 0.18
   row_padding_x_rows: 0.05
   row_padding_y_rows: 0.06
   row_suppression_center_distance_rows: 0.62
