@@ -4,6 +4,7 @@ import numpy as np
 from overwatch_vision.models import KillFeedRow, Rect
 from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
 from overwatch_vision.killfeed.row_normalizer import KillFeedRowNormalizer
+from overwatch_vision.killfeed.row_verifier import KillFeedRowVerifier
 from overwatch_vision.killfeed.tracker import KillFeedTracker
 from overwatch_vision.utils.geometry import translate_rect
 from overwatch_vision.utils.image_ops import grayscale_fingerprint
@@ -23,6 +24,7 @@ class KillFeedDetector:
         kcfg = config["killfeed"]
 
         self.row_detector = KillFeedRowDetector(config)
+        self.row_verifier = KillFeedRowVerifier(config)
         self.normalizer = KillFeedRowNormalizer(
             width=int(kcfg["normalized_row_width"]),
             height=int(kcfg["normalized_row_height"]),
@@ -367,6 +369,12 @@ class KillFeedDetector:
                 box.x1:box.x2,
             ]
 
+            verified, verifier_probability = (
+                self.row_verifier.accept(crop)
+            )
+            if not verified:
+                continue
+
             normalized = self.normalizer.normalize(crop)
 
             fingerprint = grayscale_fingerprint(
@@ -420,7 +428,14 @@ class KillFeedDetector:
                     victim_team_hint=candidate.victim_team,
                     killer_hero_box_local=killer_hero_box,
                     victim_hero_box_local=victim_hero_box,
-                    score=candidate.score,
+                    score=(
+                        candidate.score
+                        if verifier_probability is None
+                        else (
+                            0.35 * candidate.score
+                            + 0.65 * verifier_probability
+                        )
+                    ),
                 )
             )
 
