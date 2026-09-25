@@ -188,6 +188,51 @@ The project now supports a staged path away from generic color/portrait guessing
 6. Hero identity still requires multi-frame consensus before a spoken call, and
    parsed events still pass through the 10-second semantic duplicate guard.
 
+### Labeling and training the row verifier
+
+Existing low-confidence row crops under `debug_frames/killfeed_review/` can be
+turned into a binary dataset without recording more games first.
+
+Run:
+
+```powershell
+.\\.venv\\Scripts\\python.exe .\\label_killfeed_rows.py
+```
+
+Controls:
+- `R` = real Overwatch kill-feed row
+- `F` = false detection / scenery / malformed crop
+- `S` = skip if unsure
+- `Q` or `Esc` = quit
+
+Progress is saved after every image. Labeled copies are stored locally under:
+
+```text
+.cache/killfeed_row_verifier/real/
+.cache/killfeed_row_verifier/false/
+```
+
+After both classes have useful examples, train:
+
+```powershell
+.\\.venv\\Scripts\\python.exe .\\train_killfeed_row_verifier.py
+```
+
+The trainer keeps captures from the same short time window together during the
+train/validation split so near-duplicate frames are less likely to inflate the
+held-out score. It exports:
+
+```text
+models/killfeed_row_verifier.pt
+models/killfeed_row_verifier_labels.json
+```
+
+On restart, the current red/blue geometry detector still proposes candidate
+rows, but the learned verifier rejects proposals that do not visually resemble
+a real kill-feed entry. If no verifier model exists, runtime behavior is
+unchanged. This verifier reduces false positives; a later full-ROI localization
+model will be needed to recover rows that the color detector never proposes.
+
 ### Collecting row examples
 
 Run:
