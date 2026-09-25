@@ -132,6 +132,19 @@ ocr:
   # occasional OCR jobs from monopolizing the CPU.
   cpu_threads: 2
 
+killfeed_row_verifier:
+  # Optional learned second-stage filter. Until the model files exist, this
+  # changes nothing and every geometry/color proposal passes through.
+  enabled: true
+  model_path: "models/killfeed_row_verifier.pt"
+  labels_path: "models/killfeed_row_verifier_labels.json"
+  input_width: 256
+  input_height: 64
+
+  # Probability that a proposed crop must have of being a real kill-feed row.
+  # Start moderately conservative; tune after the first held-out test.
+  min_real_probability: 0.68
+
 hero_classifier:
   # Once train_hero_classifier.py creates these files, the runtime prefers
   # this kill-feed-specific CNN over generic portrait similarity.
