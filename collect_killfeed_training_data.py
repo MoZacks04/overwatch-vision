@@ -19,12 +19,46 @@ OUTPUT_DIR = (
     / "killfeed_rows"
     / "raw"
 )
+CANDIDATE_DIR = (
+    PROJECT_ROOT
+    / "debug_frames"
+    / "row_candidates"
+)
 
 
 def load_config():
     path = PROJECT_ROOT / "config" / "settings.yaml"
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def save_candidate_crops(image, candidates, stamp: int) -> int:
+    CANDIDATE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    saved = 0
+
+    for index, item in enumerate(candidates):
+        box = item.bbox
+
+        crop = image[
+            max(0, box.y1):max(0, box.y2),
+            max(0, box.x1):max(0, box.x2),
+        ]
+
+        if crop is None or crop.size == 0:
+            continue
+
+        path = CANDIDATE_DIR / (
+            f"candidate_{stamp}_{index}_{item.score:.2f}.png"
+        )
+
+        if cv2.imwrite(str(path), crop):
+            saved += 1
+
+    return saved
 
 
 def save_sample(image, candidates):
@@ -68,9 +102,16 @@ def save_sample(image, candidates):
         encoding="utf-8",
     )
 
+    candidate_count = save_candidate_crops(
+        image,
+        candidates,
+        stamp,
+    )
+
     print(
         f"[dataset] saved {image_path.name} "
-        f"with {len(candidates)} weak row label(s)"
+        f"with {len(candidates)} weak row label(s); "
+        f"{candidate_count} candidate crop(s)"
     )
 
 
@@ -91,8 +132,12 @@ def main():
     print("Q = quit")
     print()
     print(
-        "Saved images go to "
+        "Saved full ROI images go to "
         "datasets/killfeed_rows/raw/"
+    )
+    print(
+        "Every proposed row crop also goes to "
+        "debug_frames/row_candidates/ for verifier labeling."
     )
 
     while True:
