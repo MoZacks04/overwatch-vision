@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import time
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import cv2
 import yaml
@@ -12,7 +16,6 @@ from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
 from overwatch_vision.regions import HUDRegionManager
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = (
     PROJECT_ROOT
     / "datasets"
