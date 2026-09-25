@@ -281,6 +281,14 @@ def main() -> None:
     parser.add_argument("--input-height", type=int, default=64)
     parser.add_argument("--validation-fraction", type=float, default=0.20)
     parser.add_argument(
+        "--allow-small-negative-class",
+        action="store_true",
+        help=(
+            "Allow training with fewer than 20 FALSE examples. "
+            "Not recommended because the verifier can become overconfident."
+        ),
+    )
+    parser.add_argument(
         "--group-gap-ms",
         type=int,
         default=2500,
@@ -314,7 +322,22 @@ def main() -> None:
             f"  {name:<8} {len(paths_by_class[name]):>4} samples"
         )
 
-    if min(len(paths_by_class[name]) for name in CLASS_NAMES) < 10:
+    false_count = len(paths_by_class["false"])
+    real_count = len(paths_by_class["real"])
+
+    if false_count < 20 and not args.allow_small_negative_class:
+        raise SystemExit(
+            "Only "
+            f"{false_count} FALSE examples are labeled. "
+            "Do not train the verifier yet: collect and label at least "
+            "20 real false-positive proposals (50+ is better). "
+            "Use collect_killfeed_training_data.py with auto-save, then run "
+            "label_killfeed_rows.py --source debug_frames\\row_candidates. "
+            "If you intentionally want an experimental run anyway, pass "
+            "--allow-small-negative-class."
+        )
+
+    if min(false_count, real_count) < 10:
         print(
             "WARNING: one class has fewer than 10 examples. "
             "The first model may be unstable."
