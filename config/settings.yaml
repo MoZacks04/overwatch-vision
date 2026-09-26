@@ -6,65 +6,65 @@ capture:
 performance:
   # The preview/capture loop stays at 30 FPS, but expensive analysis does
   # not need to run on every captured frame.
-  killfeed_every_n_frames: 3
+  killfeed_every_n_frames: 2
   team_status_every_n_frames: 15
   parser_results_per_frame: 8
 
 killfeed:
-  # Tight top-right ROI. Based on the captured matches, the kill feed never
-  # needs the old 38% screen-width search. This trims background pixels before
-  # any row detection or hero work happens.
+  # Keep the ROI broad enough to include long and deeply stacked feed rows.
+  # The learned verifier now handles the extra background, so proposal recall
+  # is more important than keeping this search window extremely tight.
   search_region:
-    left: 0.68
-    top: 0.045
+    left: 0.64
+    top: 0.035
     right: 0.995
-    bottom: 0.205
+    bottom: 0.285
 
   color_panels:
     red:
-      hue_low_1: 168
+      hue_low_1: 165
       hue_high_1: 179
       hue_low_2: 0
-      hue_high_2: 6
-      min_saturation: 100
-      min_value: 85
+      hue_high_2: 10
+      min_saturation: 80
+      min_value: 70
     blue:
-      hue_low: 94
-      hue_high: 103
-      min_saturation: 105
-      min_value: 90
+      hue_low: 88
+      hue_high: 110
+      min_saturation: 80
+      min_value: 70
 
-  # Individual team-colored nameplates. The height/shape limits deliberately
-  # reject large red/blue map surfaces before row pairing even begins.
-  min_panel_area_fraction: 0.0015
+  # First-stage panel rules are intentionally permissive. The learned row
+  # verifier is the second-stage filter, so this detector should prefer
+  # proposing a questionable row over dropping a real feed entry.
+  min_panel_area_fraction: 0.0010
   max_panel_area_fraction: 0.10
-  min_panel_width_fraction: 0.055
+  min_panel_width_fraction: 0.040
   max_panel_width_fraction: 0.48
-  min_panel_height_fraction: 0.095
+  min_panel_height_fraction: 0.065
   max_panel_height_fraction: 0.31
-  min_panel_aspect_ratio: 1.45
+  min_panel_aspect_ratio: 1.20
   max_panel_aspect_ratio: 10.0
-  min_panel_fill_ratio: 0.54
+  min_panel_fill_ratio: 0.42
   panel_close_width_fraction: 0.010
-  panel_scan_left_fraction: 0.10
+  panel_scan_left_fraction: 0.06
 
-  # A valid elimination row is one red panel + one blue panel with compatible
-  # geometry. This is what prevents similarly colored scenery from pulling
-  # the green row rectangle across the screen.
-  pair_min_height_ratio: 0.72
-  pair_max_center_y_delta_rows: 0.36
-  pair_min_vertical_overlap: 0.64
-  pair_min_gap_rows: -0.25
-  pair_max_gap_rows: 3.20
-  min_pair_score: 0.55
+  # Opposite-color panel pairing remains a useful proposal heuristic, but
+  # these geometry gates are deliberately broad for recall.
+  pair_min_height_ratio: 0.58
+  pair_max_center_y_delta_rows: 0.55
+  pair_min_vertical_overlap: 0.48
+  pair_min_gap_rows: -0.40
+  pair_max_gap_rows: 3.80
+  min_pair_score: 0.42
 
-  min_row_left_fraction: 0.16
-  min_row_width_fraction: 0.20
-  max_row_width_fraction: 0.78
-  max_right_gap_fraction: 0.18
+  min_row_left_fraction: 0.08
+  min_row_width_fraction: 0.16
+  max_row_width_fraction: 0.86
+  max_right_gap_fraction: 0.24
   row_padding_x_rows: 0.05
   row_padding_y_rows: 0.06
-  row_suppression_center_distance_rows: 0.62
+  row_suppression_center_distance_rows: 0.50
 
   normalized_row_width: 640
   normalized_row_height: 72
@@ -141,9 +141,10 @@ killfeed_row_verifier:
   input_width: 256
   input_height: 64
 
-  # Probability that a proposed crop must have of being a real kill-feed row.
-  # Start moderately conservative; tune after the first held-out test.
-  min_real_probability: 0.68
+  # Keep the learned verifier near a neutral decision threshold. The proposal
+  # stage is intentionally permissive, so the verifier removes obvious junk
+  # without sacrificing too many real rows.
+  min_real_probability: 0.50
 
 hero_classifier:
   # Once train_hero_classifier.py creates these files, the runtime prefers
@@ -178,14 +179,14 @@ hero_recognition:
   local_min_margin: 0.06
 
 tracking:
-  # At ~10 Hz kill-feed analysis, five confirmations add about 0.5 s latency
-  # but give the hero recognizer several clean frames before one spoken call.
-  confirmation_frames: 5
+  # Favor recall: three confirmations at ~15 Hz is enough to stabilize a row
+  # without requiring an intermittently detected entry to survive for 0.5 s.
+  confirmation_frames: 3
   history_frames: 6
   missing_frames_before_expire: 18
-  max_vertical_shift_fraction: 0.18
+  max_vertical_shift_fraction: 0.24
   fingerprint_size: 16
-  fingerprint_match_threshold: 0.78
+  fingerprint_match_threshold: 0.75
 
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
