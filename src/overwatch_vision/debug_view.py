@@ -231,6 +231,23 @@ class DebugView:
             "draw_rows",
             True,
         ):
+            for box in detector_debug.get(
+                "localizer_proposals",
+                [],
+            ):
+                x1 = roi_rect.x1 + box.x1
+                y1 = roi_rect.y1 + box.y1
+                x2 = roi_rect.x1 + box.x2
+                y2 = roi_rect.y1 + box.y2
+
+                cv2.rectangle(
+                    output,
+                    (x1, y1),
+                    (x2, y2),
+                    (255, 0, 255),
+                    1,
+                )
+
             for rejected in detector_debug.get(
                 "verifier_rejections",
                 [],
@@ -384,6 +401,28 @@ class DebugView:
             "draw_rows",
             True,
         ):
+            for box in detector_debug.get(
+                "localizer_proposals",
+                [],
+            ):
+                cv2.rectangle(
+                    output,
+                    (box.x1, box.y1),
+                    (box.x2, box.y2),
+                    (255, 0, 255),
+                    1,
+                )
+                cv2.putText(
+                    output,
+                    "localizer",
+                    (box.x1, max(18, box.y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.40,
+                    (255, 0, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
             for rejected in detector_debug.get(
                 "verifier_rejections",
                 [],
@@ -484,6 +523,9 @@ class DebugView:
         proposal_count = len(
             detector_debug.get("proposals", [])
         )
+        localizer_count = len(
+            detector_debug.get("localizer_proposals", [])
+        )
         reject_count = len(
             detector_debug.get("verifier_rejections", [])
         )
@@ -491,7 +533,8 @@ class DebugView:
         status = (
             f"Kill Feed Monitor | "
             f"FPS {fps:.1f} | "
-            f"prop {proposal_count} | "
+            f"hsv {proposal_count} | "
+            f"loc {localizer_count} | "
             f"pass {len(detector_debug['rows'])} | "
             f"reject {reject_count} | "
             f"parse {parser_pending}"
