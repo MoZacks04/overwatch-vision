@@ -362,6 +362,44 @@ class KillFeedDetector:
         )
         return intersection / max(1.0, float(union))
 
+    @classmethod
+    def _same_visual_row(cls, a: Rect, b: Rect) -> bool:
+        """
+        Decide whether two boxes describe the same horizontal kill-feed row.
+
+        The learned localizer and legacy HSV detector often agree on Y but
+        disagree substantially on row width. IoU alone can therefore treat
+        one real feed entry as two separate detections and create duplicate
+        tracks/announcements.
+        """
+        if cls._iou(a, b) >= 0.35:
+            return True
+
+        overlap_y = max(
+            0,
+            min(a.y2, b.y2) - max(a.y1, b.y1),
+        )
+        min_height = max(
+            1,
+            min(a.height, b.height),
+        )
+        vertical_overlap = overlap_y / float(min_height)
+
+        reference_height = max(
+            1.0,
+            (a.height + b.height) / 2.0,
+        )
+        center_distance_rows = (
+            abs(a.cy - b.cy) / reference_height
+        )
+
+        # Same feed row: strong vertical overlap and essentially the same
+        # center line, even when one detector predicts a wider crop.
+        return (
+            vertical_overlap >= 0.60
+            and center_distance_rows <= 0.35
+        )
+
     def _localizer_panel_geometry(self, crop):
         """
         Recover red/blue nameplate geometry inside an already-localized row.
@@ -644,7 +682,10 @@ class KillFeedDetector:
         # already accepted legacy row, keep the richer legacy row metadata.
         for localizer_box, localizer_confidence in localizer_detections:
             if any(
-                self._iou(localizer_box, row.bbox_roi) >= 0.45
+                self._same_visual_row(
+                    localizer_box,
+                    row.bbox_roi,
+                )
                 for row in rows
             ):
                 continue
@@ -666,11 +707,10 @@ class KillFeedDetector:
             item
             for item in verifier_rejections
             if not any(
-                self._iou(
+                self._same_visual_row(
                     item["bbox_roi"],
                     row.bbox_roi,
                 )
-                >= 0.45
                 for row in rows
             )
         ]
