@@ -529,6 +529,18 @@ class DebugView:
         reject_count = len(
             detector_debug.get("verifier_rejections", [])
         )
+        hero_icon_boxes = int(
+            detector_debug.get(
+                "hero_icon_boxes",
+                0,
+            )
+        )
+        hero_icon_pairs = int(
+            detector_debug.get(
+                "hero_icon_pairs",
+                0,
+            )
+        )
 
         status = (
             f"Kill Feed Monitor | "
@@ -536,6 +548,7 @@ class DebugView:
             f"hsv {proposal_count} | "
             f"loc {localizer_count} | "
             f"pass {len(detector_debug['rows'])} | "
+            f"hero {hero_icon_pairs}/{hero_icon_boxes} | "
             f"reject {reject_count} | "
             f"parse {parser_pending}"
         )
