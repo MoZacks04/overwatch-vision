@@ -231,6 +231,42 @@ class DebugView:
             "draw_rows",
             True,
         ):
+            for rejected in detector_debug.get(
+                "verifier_rejections",
+                [],
+            ):
+                box = rejected["bbox_roi"]
+                probability = rejected.get("probability")
+
+                x1 = roi_rect.x1 + box.x1
+                y1 = roi_rect.y1 + box.y1
+                x2 = roi_rect.x1 + box.x2
+                y2 = roi_rect.y1 + box.y2
+
+                cv2.rectangle(
+                    output,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 80, 255),
+                    2,
+                )
+
+                label = (
+                    "REJECT"
+                    if probability is None
+                    else f"REJECT {probability:.2f}"
+                )
+                cv2.putText(
+                    output,
+                    label,
+                    (x1, max(18, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.44,
+                    (0, 80, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
             for row in detector_debug["rows"]:
                 box = row.bbox_game
 
@@ -348,6 +384,37 @@ class DebugView:
             "draw_rows",
             True,
         ):
+            for rejected in detector_debug.get(
+                "verifier_rejections",
+                [],
+            ):
+                box = rejected["bbox_roi"]
+                probability = rejected.get("probability")
+
+                cv2.rectangle(
+                    output,
+                    (box.x1, box.y1),
+                    (box.x2, box.y2),
+                    (0, 80, 255),
+                    2,
+                )
+
+                label = (
+                    "reject"
+                    if probability is None
+                    else f"reject {probability:.2f}"
+                )
+                cv2.putText(
+                    output,
+                    label,
+                    (box.x1, max(18, box.y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.43,
+                    (0, 80, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
             for row in detector_debug["rows"]:
                 box = row.bbox_roi
 
@@ -414,10 +481,19 @@ class DebugView:
                 thickness=1,
             )
 
+        proposal_count = len(
+            detector_debug.get("proposals", [])
+        )
+        reject_count = len(
+            detector_debug.get("verifier_rejections", [])
+        )
+
         status = (
             f"Kill Feed Monitor | "
             f"FPS {fps:.1f} | "
-            f"rows {len(detector_debug['rows'])} | "
+            f"prop {proposal_count} | "
+            f"pass {len(detector_debug['rows'])} | "
+            f"reject {reject_count} | "
             f"parse {parser_pending}"
         )
 
