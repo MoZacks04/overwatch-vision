@@ -149,6 +149,20 @@ killfeed_localizer:
   imgsz: 640
   max_det: 8
 
+hero_icon_localizer:
+  # Optional learned SECOND-STAGE detector. It searches only inside rows that
+  # the kill-feed detector has already found, then supplies the exact K/V
+  # portrait rectangles used by hero classification.
+  enabled: true
+  model_path: "models/killfeed_hero_icon_localizer.pt"
+
+  # Favor recall here. Two stable portrait boxes are required before learned
+  # geometry replaces the older hand-estimated K/V boxes.
+  min_confidence: 0.20
+  iou_threshold: 0.45
+  imgsz: 640
+  max_det: 4
+
 killfeed_row_verifier:
   # Optional learned second-stage filter. Until the model files exist, this
   # changes nothing and every geometry/color proposal passes through.
