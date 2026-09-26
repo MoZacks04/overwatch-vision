@@ -143,7 +143,10 @@ killfeed_localizer:
   # and downstream parsing can reject unstable detections later.
   min_confidence: 0.20
   iou_threshold: 0.45
-  imgsz: 416
+
+  # Train and run at the same 640px size. Validation showed the model is fast
+  # enough on CPU, so keep the extra detail for small/faded kill-feed rows.
+  imgsz: 640
   max_det: 8
 
 killfeed_row_verifier:
