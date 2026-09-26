@@ -1,0 +1,3 @@
+# Extra dependencies used only for model training.
+# Install into the same .venv when you are ready to train.
+ultralytics>=8.3
