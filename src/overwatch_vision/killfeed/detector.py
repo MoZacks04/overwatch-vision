@@ -4,6 +4,7 @@ import numpy as np
 from overwatch_vision.models import KillFeedRow, Rect
 from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
 from overwatch_vision.killfeed.row_localizer import KillFeedRowLocalizer
+from overwatch_vision.killfeed.hero_icon_localizer import KillFeedHeroIconLocalizer
 from overwatch_vision.killfeed.row_normalizer import KillFeedRowNormalizer
 from overwatch_vision.killfeed.row_verifier import KillFeedRowVerifier
 from overwatch_vision.killfeed.tracker import KillFeedTracker
@@ -27,6 +28,8 @@ class KillFeedDetector:
         self.row_detector = KillFeedRowDetector(config)
         self.row_localizer = KillFeedRowLocalizer(config)
         self.row_localizer.warmup()
+        self.hero_icon_localizer = KillFeedHeroIconLocalizer(config)
+        self.hero_icon_localizer.warmup()
         self.row_verifier = KillFeedRowVerifier(config)
         self.normalizer = KillFeedRowNormalizer(
             width=int(kcfg["normalized_row_width"]),
@@ -624,6 +627,89 @@ class KillFeedDetector:
             score=float(confidence),
         )
 
+    def _apply_learned_hero_boxes(self, rows):
+        """
+        Replace hand-estimated K/V portrait boxes with detections from the
+        learned portrait localizer whenever it confidently finds two icons.
+
+        The portrait detector uses one class only. Role assignment is spatial:
+        left primary portrait = killer, right primary portrait = victim.
+        """
+        if not rows:
+            return
+
+        detections_by_row = (
+            self.hero_icon_localizer.detect_batch(
+                [row.crop for row in rows]
+            )
+        )
+
+        for row, detections in zip(
+            rows,
+            detections_by_row,
+        ):
+            if len(detections) < 2:
+                continue
+
+            row_width = max(
+                1,
+                row.crop.shape[1],
+            )
+
+            best_pair = None
+            best_score = -1.0
+
+            for left_index in range(
+                len(detections)
+            ):
+                for right_index in range(
+                    left_index + 1,
+                    len(detections),
+                ):
+                    first = detections[left_index]
+                    second = detections[right_index]
+
+                    if first[0].cx <= second[0].cx:
+                        left = first
+                        right = second
+                    else:
+                        left = second
+                        right = first
+
+                    separation = (
+                        right[0].cx
+                        - left[0].cx
+                    ) / float(row_width)
+
+                    if separation < 0.10:
+                        continue
+
+                    # Confidence is primary. A small separation bonus favors
+                    # the two main K/V portraits over clustered spurious boxes.
+                    pair_score = (
+                        float(left[1])
+                        + float(right[1])
+                        + 0.20 * min(
+                            1.0,
+                            separation,
+                        )
+                    )
+
+                    if pair_score > best_score:
+                        best_score = pair_score
+                        best_pair = (
+                            left[0],
+                            right[0],
+                        )
+
+            if best_pair is None:
+                continue
+
+            (
+                row.killer_hero_box_local,
+                row.victim_hero_box_local,
+            ) = best_pair
+
     def get_track_row(self, track_id):
         for track in self.tracker.tracks:
             if track.track_id == track_id:
@@ -775,6 +861,13 @@ class KillFeedDetector:
                 for row in rows
             )
         ]
+
+        # The learned portrait localizer runs only inside rows already found
+        # by the kill-feed detector. When its model exists, these boxes replace
+        # the older hand-estimated K/V crop geometry.
+        self._apply_learned_hero_boxes(
+            rows
+        )
 
         events = self.tracker.update(
             rows=rows,
