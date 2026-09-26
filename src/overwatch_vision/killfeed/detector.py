@@ -34,6 +34,8 @@ class KillFeedDetector:
         self.last_debug = {
             "mask": None,
             "components": [],
+            "proposals": [],
+            "verifier_rejections": [],
             "rows": [],
             "events": [],
         }
@@ -43,6 +45,8 @@ class KillFeedDetector:
         self.last_debug = {
             "mask": None,
             "components": [],
+            "proposals": [],
+            "verifier_rejections": [],
             "rows": [],
             "events": [],
         }
@@ -360,6 +364,7 @@ class KillFeedDetector:
         )
 
         rows = []
+        verifier_rejections = []
 
         for candidate in candidates:
             box = candidate.bbox
@@ -373,6 +378,12 @@ class KillFeedDetector:
                 self.row_verifier.accept(crop)
             )
             if not verified:
+                verifier_rejections.append(
+                    {
+                        "bbox_roi": box,
+                        "probability": verifier_probability,
+                    }
+                )
                 continue
 
             normalized = self.normalizer.normalize(crop)
@@ -448,6 +459,11 @@ class KillFeedDetector:
         self.last_debug = {
             "mask": mask,
             "components": components,
+            "proposals": [
+                candidate.bbox
+                for candidate in candidates
+            ],
+            "verifier_rejections": verifier_rejections,
             "rows": rows,
             "events": events,
         }
