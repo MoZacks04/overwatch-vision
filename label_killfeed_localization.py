@@ -400,6 +400,33 @@ class BoxEditor:
         return canvas
 
 
+def dataset_totals():
+    annotated = 0
+    positive = 0
+    empty = 0
+    row_boxes = 0
+
+    if not ANNOTATION_DIR.exists():
+        return annotated, positive, empty, row_boxes
+
+    for path in ANNOTATION_DIR.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        annotated += 1
+        boxes = payload.get("boxes", [])
+        row_boxes += len(boxes)
+
+        if boxes:
+            positive += 1
+        else:
+            empty += 1
+
+    return annotated, positive, empty, row_boxes
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -473,6 +500,12 @@ def main():
         print(
             f"Imported {imported} confirmed-empty ROI image(s); "
             f"skipped {skipped} already annotated."
+        )
+        totals = dataset_totals()
+        print(
+            "Dataset totals: "
+            f"ROI={totals[0]} positive={totals[1]} "
+            f"empty={totals[2]} row_boxes={totals[3]}"
         )
         print(f"Dataset: {DATASET_ROOT}")
         return
@@ -582,6 +615,12 @@ def main():
     print()
     print(f"Saved this run: {saved}")
     print(f"Skipped this run: {skipped}")
+    totals = dataset_totals()
+    print(
+        "Dataset totals: "
+        f"ROI={totals[0]} positive={totals[1]} "
+        f"empty={totals[2]} row_boxes={totals[3]}"
+    )
     print(f"Dataset: {DATASET_ROOT}")
 
 
