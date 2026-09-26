@@ -132,6 +132,20 @@ ocr:
   # occasional OCR jobs from monopolizing the CPU.
   cpu_threads: 2
 
+killfeed_localizer:
+  # Optional learned FIRST-STAGE detector over the full kill-feed ROI.
+  # Until models/killfeed_row_localizer.pt exists, runtime behavior is
+  # unchanged and the legacy color/geometry detector remains the only source.
+  enabled: true
+  model_path: "models/killfeed_row_localizer.pt"
+
+  # Low threshold on purpose: localization should favor recall. The tracker
+  # and downstream parsing can reject unstable detections later.
+  min_confidence: 0.20
+  iou_threshold: 0.45
+  imgsz: 416
+  max_det: 8
+
 killfeed_row_verifier:
   # Optional learned second-stage filter. Until the model files exist, this
   # changes nothing and every geometry/color proposal passes through.
