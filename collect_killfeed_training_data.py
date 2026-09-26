@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import random
 import sys
 import time
 
@@ -27,12 +28,111 @@ CANDIDATE_DIR = (
     / "debug_frames"
     / "row_candidates"
 )
+NEGATIVE_ROI_DIR = (
+    PROJECT_ROOT
+    / "datasets"
+    / "killfeed_rows"
+    / "negative_rois"
+)
+ROW_VERIFIER_REAL_DIR = (
+    PROJECT_ROOT
+    / ".cache"
+    / "killfeed_row_verifier"
+    / "real"
+)
+ROW_VERIFIER_FALSE_DIR = (
+    PROJECT_ROOT
+    / ".cache"
+    / "killfeed_row_verifier"
+    / "false"
+)
 
 
 def load_config():
     path = PROJECT_ROOT / "config" / "settings.yaml"
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def load_real_crop_shapes() -> list[tuple[int, int]]:
+    shapes: list[tuple[int, int]] = []
+
+    if not ROW_VERIFIER_REAL_DIR.exists():
+        return shapes
+
+    for path in ROW_VERIFIER_REAL_DIR.glob("*.png"):
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None or image.size == 0:
+            continue
+
+        h, w = image.shape[:2]
+        if h > 0 and w > 0:
+            shapes.append((w, h))
+
+    return shapes
+
+
+def save_confirmed_negative(
+    image,
+    real_crop_shapes: list[tuple[int, int]],
+    crops_per_roi: int = 4,
+) -> None:
+    """Save a user-confirmed empty kill-feed ROI and realistic false crops."""
+    NEGATIVE_ROI_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    ROW_VERIFIER_FALSE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    stamp = int(time.time() * 1000)
+    roi_path = NEGATIVE_ROI_DIR / f"negative_roi_{stamp}.png"
+    cv2.imwrite(str(roi_path), image)
+
+    roi_h, roi_w = image.shape[:2]
+    rng = random.Random(stamp)
+    saved = 0
+
+    for index in range(crops_per_roi):
+        if real_crop_shapes:
+            base_w, base_h = rng.choice(real_crop_shapes)
+            scale = rng.uniform(0.92, 1.08)
+            crop_w = int(round(base_w * scale))
+            crop_h = int(round(base_h * scale))
+        else:
+            crop_w = int(round(roi_w * rng.uniform(0.42, 0.82)))
+            crop_h = int(round(roi_h * rng.uniform(0.18, 0.32)))
+
+        crop_w = max(24, min(crop_w, roi_w))
+        crop_h = max(16, min(crop_h, roi_h))
+
+        # Kill-feed rows are normally right-aligned, so make the negatives
+        # resemble the locations the verifier will actually see.
+        max_right_gap = max(0, int(round(roi_w * 0.10)))
+        right_gap = rng.randint(0, max_right_gap) if max_right_gap else 0
+        x2 = max(crop_w, roi_w - right_gap)
+        x1 = max(0, x2 - crop_w)
+
+        max_y = max(0, roi_h - crop_h)
+        y1 = rng.randint(0, max_y) if max_y else 0
+        y2 = y1 + crop_h
+
+        crop = image[y1:y2, x1:x2]
+        if crop is None or crop.size == 0:
+            continue
+
+        path = ROW_VERIFIER_FALSE_DIR / (
+            f"row_{stamp}_negative_{index}.png"
+        )
+        if cv2.imwrite(str(path), crop):
+            saved += 1
+
+    print(
+        f"[negative] saved {roi_path.name} and "
+        f"{saved} confirmed FALSE row-sized crop(s)"
+    )
 
 
 def save_candidate_crops(image, candidates, stamp: int) -> int:
@@ -124,13 +224,15 @@ def main():
     capture = OverwatchCapture(config)
     regions = HUDRegionManager(config)
     detector = KillFeedRowDetector(config)
+    real_crop_shapes = load_real_crop_shapes()
 
     auto_save = False
     last_auto_save = 0.0
     auto_interval = 0.55
 
     print("Kill-feed dataset collector")
-    print("S = save current ROI")
+    print("S = save current ROI for the future localization dataset")
+    print("N = CONFIRM no kill-feed row is visible; save FALSE negatives")
     print("A = toggle auto-save while rows are visible")
     print("Q = quit")
     print()
@@ -141,6 +243,10 @@ def main():
     print(
         "Every proposed row crop also goes to "
         "debug_frames/row_candidates/ for verifier labeling."
+    )
+    print(
+        "N saves the empty ROI plus 4 row-sized background crops directly "
+        "as confirmed FALSE verifier examples."
     )
 
     while True:
@@ -231,6 +337,12 @@ def main():
             save_sample(
                 region.image,
                 candidates,
+            )
+
+        if key in (ord("n"), ord("N")):
+            save_confirmed_negative(
+                region.image,
+                real_crop_shapes,
             )
 
     cv2.destroyAllWindows()
