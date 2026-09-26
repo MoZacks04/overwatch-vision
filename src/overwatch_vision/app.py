@@ -113,7 +113,17 @@ def _event_speech(
     event,
     friendly_team: str,
     speak_player_names: bool,
+    require_both_heroes: bool = False,
 ) -> str | None:
+    # When requested, keep audio silent until both hero identities are known.
+    # This avoids vague repeated calls such as "enemy eliminated your ally"
+    # while the hero classifier is still being improved.
+    if require_both_heroes and (
+        not event.killer_hero
+        or not event.victim_hero
+    ):
+        return None
+
     # Team-side classification is currently much more trustworthy than hero
     # recognition. Never invent a hero name just because the matcher found a
     # weak nearest neighbour; fall back to "enemy" / "ally" language.
@@ -217,6 +227,9 @@ def main():
     )
     speak_player_names = bool(
         audio_cfg.get("speak_player_names", False)
+    )
+    require_both_heroes = bool(
+        audio_cfg.get("require_both_heroes", False)
     )
 
     capture_cfg = config.get("capture", {})
@@ -484,6 +497,7 @@ def main():
                         event,
                         friendly_team=friendly_team,
                         speak_player_names=speak_player_names,
+                        require_both_heroes=require_both_heroes,
                     )
 
                 if speech:
