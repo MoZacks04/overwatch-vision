@@ -176,12 +176,12 @@ def main():
     capture = OverwatchCapture(config)
     regions = HUDRegionManager(config)
 
-    # EasyOCR remains available for arbitrary player handles, but it is no
-    # longer called from the real-time capture loop.
+    # Build the kill-feed detector before starting the background OCR loader.
+    # Both paths use PyTorch, and concurrent initialization can stall startup
+    # on some Windows systems.
     ocr = OCRReader(config)
-    ocr.warmup_async()
-
     killfeed = KillFeedDetector(config)
+    ocr.warmup_async()
 
     parser = KillFeedParser(config, ocr)
     parser_worker = AsyncKillFeedParser(
