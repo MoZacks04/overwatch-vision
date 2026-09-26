@@ -42,6 +42,8 @@ class KillFeedDetector:
             "components": [],
             "proposals": [],
             "localizer_proposals": [],
+            "hero_icon_boxes": 0,
+            "hero_icon_pairs": 0,
             "verifier_rejections": [],
             "rows": [],
             "events": [],
@@ -54,6 +56,8 @@ class KillFeedDetector:
             "components": [],
             "proposals": [],
             "localizer_proposals": [],
+            "hero_icon_boxes": 0,
+            "hero_icon_pairs": 0,
             "verifier_rejections": [],
             "rows": [],
             "events": [],
@@ -636,13 +640,22 @@ class KillFeedDetector:
         left primary portrait = killer, right primary portrait = victim.
         """
         if not rows:
-            return
+            return {
+                "boxes": 0,
+                "pairs": 0,
+            }
 
         detections_by_row = (
             self.hero_icon_localizer.detect_batch(
                 [row.crop for row in rows]
             )
         )
+
+        total_boxes = sum(
+            len(detections)
+            for detections in detections_by_row
+        )
+        learned_pairs = 0
 
         for row, detections in zip(
             rows,
@@ -709,6 +722,12 @@ class KillFeedDetector:
                 row.killer_hero_box_local,
                 row.victim_hero_box_local,
             ) = best_pair
+            learned_pairs += 1
+
+        return {
+            "boxes": total_boxes,
+            "pairs": learned_pairs,
+        }
 
     def get_track_row(self, track_id):
         for track in self.tracker.tracks:
@@ -865,8 +884,10 @@ class KillFeedDetector:
         # The learned portrait localizer runs only inside rows already found
         # by the kill-feed detector. When its model exists, these boxes replace
         # the older hand-estimated K/V crop geometry.
-        self._apply_learned_hero_boxes(
-            rows
+        hero_icon_debug = (
+            self._apply_learned_hero_boxes(
+                rows
+            )
         )
 
         events = self.tracker.update(
@@ -886,6 +907,8 @@ class KillFeedDetector:
                 box
                 for box, _ in localizer_detections
             ],
+            "hero_icon_boxes": hero_icon_debug["boxes"],
+            "hero_icon_pairs": hero_icon_debug["pairs"],
             "verifier_rejections": verifier_rejections,
             "rows": rows,
             "events": events,
