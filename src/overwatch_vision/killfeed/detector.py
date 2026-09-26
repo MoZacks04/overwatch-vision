@@ -3,6 +3,7 @@ import numpy as np
 
 from overwatch_vision.models import KillFeedRow, Rect
 from overwatch_vision.killfeed.row_detector import KillFeedRowDetector
+from overwatch_vision.killfeed.row_localizer import KillFeedRowLocalizer
 from overwatch_vision.killfeed.row_normalizer import KillFeedRowNormalizer
 from overwatch_vision.killfeed.row_verifier import KillFeedRowVerifier
 from overwatch_vision.killfeed.tracker import KillFeedTracker
@@ -24,6 +25,7 @@ class KillFeedDetector:
         kcfg = config["killfeed"]
 
         self.row_detector = KillFeedRowDetector(config)
+        self.row_localizer = KillFeedRowLocalizer(config)
         self.row_verifier = KillFeedRowVerifier(config)
         self.normalizer = KillFeedRowNormalizer(
             width=int(kcfg["normalized_row_width"]),
@@ -35,6 +37,7 @@ class KillFeedDetector:
             "mask": None,
             "components": [],
             "proposals": [],
+            "localizer_proposals": [],
             "verifier_rejections": [],
             "rows": [],
             "events": [],
@@ -46,6 +49,7 @@ class KillFeedDetector:
             "mask": None,
             "components": [],
             "proposals": [],
+            "localizer_proposals": [],
             "verifier_rejections": [],
             "rows": [],
             "events": [],
@@ -339,6 +343,187 @@ class KillFeedDetector:
 
         return killer_box, victim_box
 
+    @staticmethod
+    def _iou(a: Rect, b: Rect) -> float:
+        x1 = max(a.x1, b.x1)
+        y1 = max(a.y1, b.y1)
+        x2 = min(a.x2, b.x2)
+        y2 = min(a.y2, b.y2)
+
+        intersection = max(0, x2 - x1) * max(0, y2 - y1)
+        if intersection <= 0:
+            return 0.0
+
+        union = (
+            a.width * a.height
+            + b.width * b.height
+            - intersection
+        )
+        return intersection / max(1.0, float(union))
+
+    def _localizer_panel_geometry(self, crop):
+        """
+        Recover red/blue nameplate geometry inside an already-localized row.
+
+        Unlike the first-stage proposal detector, this does not apply global
+        row geometry gates. Once the learned localizer says the crop is a row,
+        we only need the strongest red and blue panel-like regions so the
+        existing hero/name parser can keep working.
+        """
+        if crop is None or crop.size == 0:
+            return None
+
+        red_mask, blue_mask, _ = self.row_detector._panel_masks(crop)
+        h, w = crop.shape[:2]
+
+        def best_panel(mask):
+            contours, _ = cv2.findContours(
+                mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            best = None
+            best_score = -1.0
+
+            for contour in contours:
+                area = float(cv2.contourArea(contour))
+                if area <= 0:
+                    continue
+
+                x, y, bw, bh = cv2.boundingRect(contour)
+
+                if bh < max(4, int(round(h * 0.34))):
+                    continue
+                if bw < max(8, int(round(w * 0.08))):
+                    continue
+
+                fill = area / max(1.0, float(bw * bh))
+                center_bonus = 1.0 - min(
+                    1.0,
+                    abs((y + bh / 2.0) - h / 2.0)
+                    / max(1.0, h / 2.0),
+                )
+                score = (
+                    area
+                    * (0.65 + 0.35 * fill)
+                    * (0.80 + 0.20 * center_bonus)
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best = Rect(
+                        x1=x,
+                        y1=y,
+                        x2=x + bw,
+                        y2=y + bh,
+                    )
+
+            return best
+
+        red_box = best_panel(red_mask)
+        blue_box = best_panel(blue_mask)
+
+        if red_box is None or blue_box is None:
+            return None
+
+        if red_box.cx <= blue_box.cx:
+            return (
+                red_box,
+                blue_box,
+                "red",
+                "blue",
+            )
+
+        return (
+            blue_box,
+            red_box,
+            "blue",
+            "red",
+        )
+
+    def _localized_row(
+        self,
+        roi_image,
+        roi_rect,
+        box,
+        confidence,
+        fingerprint_size,
+    ):
+        crop = roi_image[
+            box.y1:box.y2,
+            box.x1:box.x2,
+        ]
+
+        if crop is None or crop.size == 0:
+            return None
+
+        normalized = self.normalizer.normalize(crop)
+        fingerprint = grayscale_fingerprint(
+            normalized,
+            size=fingerprint_size,
+        )
+
+        component_boxes = []
+        component_teams = []
+        killer_panel = None
+        victim_panel = None
+        killer_team = None
+        victim_team = None
+        killer_hero_box = None
+        victim_hero_box = None
+
+        geometry = self._localizer_panel_geometry(crop)
+
+        if geometry is not None:
+            (
+                killer_panel,
+                victim_panel,
+                killer_team,
+                victim_team,
+            ) = geometry
+
+            component_boxes = [
+                killer_panel,
+                victim_panel,
+            ]
+            component_teams = [
+                killer_team,
+                victim_team,
+            ]
+
+            (
+                killer_hero_box,
+                victim_hero_box,
+            ) = self._hero_boxes_from_panels(
+                killer_panel,
+                victim_panel,
+                crop.shape[1],
+                crop.shape[0],
+                crop,
+            )
+
+        return KillFeedRow(
+            bbox_roi=box,
+            bbox_game=translate_rect(
+                box,
+                roi_rect.x1,
+                roi_rect.y1,
+            ),
+            crop=crop,
+            normalized=normalized,
+            fingerprint=fingerprint,
+            component_boxes_local=component_boxes,
+            component_teams_local=component_teams,
+            killer_panel_local=killer_panel,
+            victim_panel_local=victim_panel,
+            killer_team_hint=killer_team,
+            victim_team_hint=victim_team,
+            killer_hero_box_local=killer_hero_box,
+            victim_hero_box_local=victim_hero_box,
+            score=float(confidence),
+        )
+
     def get_track_row(self, track_id):
         for track in self.tracker.tracks:
             if track.track_id == track_id:
@@ -356,6 +541,9 @@ class KillFeedDetector:
 
     def process(self, roi_image, roi_rect, timestamp):
         candidates, mask, components = self.row_detector.detect(
+            roi_image
+        )
+        localizer_detections = self.row_localizer.detect(
             roi_image
         )
 
@@ -450,6 +638,42 @@ class KillFeedDetector:
                 )
             )
 
+        # Learned full-ROI detections are allowed to rescue rows that the
+        # color/geometry proposal path missed. If a learned box overlaps an
+        # already accepted legacy row, keep the richer legacy row metadata.
+        for localizer_box, localizer_confidence in localizer_detections:
+            if any(
+                self._iou(localizer_box, row.bbox_roi) >= 0.45
+                for row in rows
+            ):
+                continue
+
+            learned_row = self._localized_row(
+                roi_image=roi_image,
+                roi_rect=roi_rect,
+                box=localizer_box,
+                confidence=localizer_confidence,
+                fingerprint_size=fingerprint_size,
+            )
+
+            if learned_row is not None:
+                rows.append(learned_row)
+
+        # Do not display a verifier rejection if the learned localizer rescued
+        # the same visual row.
+        verifier_rejections = [
+            item
+            for item in verifier_rejections
+            if not any(
+                self._iou(
+                    item["bbox_roi"],
+                    row.bbox_roi,
+                )
+                >= 0.45
+                for row in rows
+            )
+        ]
+
         events = self.tracker.update(
             rows=rows,
             timestamp=timestamp,
@@ -462,6 +686,10 @@ class KillFeedDetector:
             "proposals": [
                 candidate.bbox
                 for candidate in candidates
+            ],
+            "localizer_proposals": [
+                box
+                for box, _ in localizer_detections
             ],
             "verifier_rejections": verifier_rejections,
             "rows": rows,
