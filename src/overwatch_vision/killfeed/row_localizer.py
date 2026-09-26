@@ -40,13 +40,26 @@ class KillFeedRowLocalizer:
     def ready(self) -> bool:
         return self._available and self._model is not None
 
+    def warmup(self) -> bool:
+        """Load the detector now so startup reports its status explicitly."""
+        self._load()
+        return self.ready
+
     def _load(self):
         if self._attempted_load:
             return
 
         self._attempted_load = True
 
-        if not self.enabled or not self.model_path.exists():
+        if not self.enabled:
+            print("[row-localizer] disabled in config.")
+            return
+
+        if not self.model_path.exists():
+            print(
+                "[row-localizer] model not found: "
+                f"{self.model_path}"
+            )
             return
 
         try:
