@@ -424,6 +424,23 @@ class KillFeedParser:
         self,
         row,
     ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        # Preferred path: the learned hero-icon localizer can provide exact
+        # K/V portrait rectangles even when red/blue panel geometry is weak.
+        if (
+            row.killer_hero_box_local is not None
+            and row.victim_hero_box_local is not None
+        ):
+            return (
+                self._safe_crop(
+                    row.crop,
+                    row.killer_hero_box_local,
+                ),
+                self._safe_crop(
+                    row.crop,
+                    row.victim_hero_box_local,
+                ),
+            )
+
         components = self._local_components(row)
 
         if len(components) < 2:
@@ -600,9 +617,74 @@ class KillFeedParser:
         components = self._local_components(row)
 
         if len(components) < 2:
-            return ParsedKillFeedRow(
-                confidence=0.0,
+            # A learned portrait detector can still make hero identity usable
+            # even when panel/color recovery failed completely.
+            if (
+                row.killer_hero_box_local is None
+                or row.victim_hero_box_local is None
+            ):
+                return ParsedKillFeedRow(
+                    confidence=0.0,
+                )
+
+            killer_hero_crop = self._safe_crop(
+                row.crop,
+                row.killer_hero_box_local,
             )
+            victim_hero_crop = self._safe_crop(
+                row.crop,
+                row.victim_hero_box_local,
+            )
+
+            killer_hero, killer_hero_conf = (
+                self.hero_recognizer.recognize(
+                    killer_hero_crop
+                )
+            )
+            victim_hero, victim_hero_conf = (
+                self.hero_recognizer.recognize(
+                    victim_hero_crop
+                )
+            )
+
+            self._save_hero_samples(
+                row,
+                killer_hero_crop,
+                victim_hero_crop,
+                row.killer_team_hint,
+                row.victim_team_hint,
+                None,
+                None,
+            )
+
+            useful = [
+                value
+                for value in (
+                    killer_hero_conf,
+                    victim_hero_conf,
+                )
+                if value > 0
+            ]
+
+            parsed = ParsedKillFeedRow(
+                killer_hero=killer_hero,
+                victim_hero=victim_hero,
+                killer_team=row.killer_team_hint,
+                victim_team=row.victim_team_hint,
+                confidence=(
+                    sum(useful) / len(useful)
+                    if useful
+                    else row.score
+                ),
+                killer_hero_confidence=killer_hero_conf,
+                victim_hero_confidence=victim_hero_conf,
+            )
+
+            self._save_review_crop(
+                row,
+                parsed,
+            )
+            return parsed
 
         fallback_killer_box, fallback_killer_team = (
             components[0]
