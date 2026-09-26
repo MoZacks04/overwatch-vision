@@ -207,8 +207,8 @@ tracking:
 
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
-  dedupe_seconds: 2.25
-  dedupe_similarity: 0.90
+  dedupe_seconds: 8.0
+  dedupe_similarity: 0.86
 
 event_dedupe:
   # Final duplicate guard after names/heroes are parsed. Same player pair or
