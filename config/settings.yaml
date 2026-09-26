@@ -224,6 +224,10 @@ audio:
   volume: 1.0
   speak_startup_test: true
   speak_player_names: false
+
+  # Only announce an elimination once both hero identities are resolved.
+  # Unknown team-only calls stay visible in the terminal but are not spoken.
+  require_both_heroes: true
   suppress_first_seconds: 2.0
 
 debug:
