@@ -26,6 +26,7 @@ class KillFeedDetector:
 
         self.row_detector = KillFeedRowDetector(config)
         self.row_localizer = KillFeedRowLocalizer(config)
+        self.row_localizer.warmup()
         self.row_verifier = KillFeedRowVerifier(config)
         self.normalizer = KillFeedRowNormalizer(
             width=int(kcfg["normalized_row_width"]),
