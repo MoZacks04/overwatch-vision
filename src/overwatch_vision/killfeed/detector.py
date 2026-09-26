@@ -432,9 +432,9 @@ class KillFeedDetector:
 
                 x, y, bw, bh = cv2.boundingRect(contour)
 
-                if bh < max(4, int(round(h * 0.34))):
+                if bh < max(3, int(round(h * 0.22))):
                     continue
-                if bw < max(8, int(round(w * 0.08))):
+                if bw < max(5, int(round(w * 0.035))):
                     continue
 
                 fill = area / max(1.0, float(bw * bh))
@@ -462,6 +462,67 @@ class KillFeedDetector:
 
         red_box = best_panel(red_mask)
         blue_box = best_panel(blue_mask)
+
+        # Faded/animated feed rows can lose enough saturation that the
+        # first-stage HSV thresholds no longer recover their panels. The
+        # learned row localizer has already established that this crop is a
+        # kill-feed row, so a more permissive second pass is safe here.
+        if red_box is None or blue_box is None:
+            hsv = cv2.cvtColor(
+                crop,
+                cv2.COLOR_BGR2HSV,
+            )
+            hue = hsv[:, :, 0]
+            saturation = hsv[:, :, 1]
+            value = hsv[:, :, 2]
+
+            usable = (
+                (saturation >= 42)
+                & (value >= 48)
+            )
+
+            soft_red = np.where(
+                usable
+                & (
+                    (hue <= 13)
+                    | (hue >= 157)
+                ),
+                255,
+                0,
+            ).astype(np.uint8)
+
+            soft_blue = np.where(
+                usable
+                & (hue >= 82)
+                & (hue <= 120),
+                255,
+                0,
+            ).astype(np.uint8)
+
+            kernel_w = max(
+                3,
+                int(round(w * 0.012)),
+            )
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_RECT,
+                (kernel_w, 3),
+            )
+
+            soft_red = cv2.morphologyEx(
+                soft_red,
+                cv2.MORPH_CLOSE,
+                kernel,
+            )
+            soft_blue = cv2.morphologyEx(
+                soft_blue,
+                cv2.MORPH_CLOSE,
+                kernel,
+            )
+
+            if red_box is None:
+                red_box = best_panel(soft_red)
+            if blue_box is None:
+                blue_box = best_panel(soft_blue)
 
         if red_box is None or blue_box is None:
             return None
