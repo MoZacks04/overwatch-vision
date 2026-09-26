@@ -227,13 +227,17 @@ def main():
     real_crop_shapes = load_real_crop_shapes()
 
     auto_save = False
+    full_roi_auto_save = False
     last_auto_save = 0.0
+    last_full_roi_save = 0.0
     auto_interval = 0.55
+    full_roi_interval = 1.0
 
     print("Kill-feed dataset collector")
-    print("S = save current ROI for the future localization dataset")
+    print("S = save current ROI now")
     print("N = CONFIRM no kill-feed row is visible; save FALSE negatives")
-    print("A = toggle auto-save while rows are visible")
+    print("A = toggle proposal-only auto-save")
+    print("F = toggle FULL-ROI auto-save every 1.0 s, even with no proposal")
     print("Q = quit")
     print()
     print(
@@ -247,6 +251,10 @@ def main():
     print(
         "N saves the empty ROI plus 4 row-sized background crops directly "
         "as confirmed FALSE verifier examples."
+    )
+    print(
+        "For localization training, use F with A off. This captures missed "
+        "rows too, instead of only saving frames the old detector already found."
     )
 
     while True:
@@ -287,9 +295,13 @@ def main():
             )
 
         status = (
-            "AUTO ON"
-            if auto_save
-            else "AUTO OFF"
+            ("PROP-AUTO ON" if auto_save else "PROP-AUTO OFF")
+            + " | "
+            + (
+                "FULL-ROI ON"
+                if full_roi_auto_save
+                else "FULL-ROI OFF"
+            )
         )
         cv2.putText(
             preview,
@@ -321,6 +333,17 @@ def main():
             )
             last_auto_save = now
 
+        if (
+            full_roi_auto_save
+            and now - last_full_roi_save
+            >= full_roi_interval
+        ):
+            save_sample(
+                region.image,
+                candidates,
+            )
+            last_full_roi_save = now
+
         key = cv2.waitKey(1) & 0xFF
 
         if key in (ord("q"), ord("Q")):
@@ -329,8 +352,15 @@ def main():
         if key in (ord("a"), ord("A")):
             auto_save = not auto_save
             print(
-                "[dataset] auto-save "
+                "[dataset] proposal-only auto-save "
                 + ("ON" if auto_save else "OFF")
+            )
+
+        if key in (ord("f"), ord("F")):
+            full_roi_auto_save = not full_roi_auto_save
+            print(
+                "[dataset] full-ROI auto-save "
+                + ("ON" if full_roi_auto_save else "OFF")
             )
 
         if key in (ord("s"), ord("S")):
