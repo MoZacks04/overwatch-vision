@@ -190,10 +190,11 @@ hero_classifier:
   # relabeling is required.
   context_fraction: 0.12
 
-  # Be conservative: an uncertain classifier result becomes "unknown" rather
-  # than a confidently wrong spoken hero name.
-  min_confidence: 0.86
-  min_margin: 0.14
+  # The wider contextual crops produce softer probabilities than the older
+  # tight crops. Keep a meaningful margin requirement, but do not reject most
+  # correct predictions before temporal consensus can combine them.
+  min_confidence: 0.78
+  min_margin: 0.08
 
 hero_recognition:
   enabled: true
