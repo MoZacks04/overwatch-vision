@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import random
 
 import cv2
 import numpy as np
@@ -417,12 +418,23 @@ def make_preview(
     cv2.putText(
         canvas,
         (
-            "ENTER save | empty ENTER skip | BACKSPACE edit | "
-            f"TAB repeat last [{repeat_text}] | ESC quit"
+            "ENTER save | empty ENTER = permanently skip unclear crop | "
+            f"TAB repeat [{repeat_text}]"
         ),
-        (24, footer_y + 76),
+        (24, footer_y + 70),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.48,
+        0.46,
+        (210, 210, 210),
+        1,
+        cv2.LINE_AA,
+    )
+
+    cv2.putText(
+        canvas,
+        "SPACE with empty input = defer this one for later | ESC quit",
+        (24, footer_y + 94),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.46,
         (210, 210, 210),
         1,
         cv2.LINE_AA,
@@ -474,6 +486,12 @@ def prompt_label(
 
         if code == 27:
             return "quit", None
+
+        # Defer a clear-but-overrepresented hero without marking it skipped.
+        # Because this only fires when the input is empty, spaces still work
+        # normally inside labels such as "soldier 76".
+        if code == 32 and not typed:
+            return "defer", None
 
         if (
             code == 9
@@ -619,6 +637,11 @@ def main():
             if payload.get("skipped"):
                 pending.append(sample)
 
+    # Source files are highly chronological, which produces long runs of the
+    # same heroes. Shuffle only the still-pending samples; saved labels remain
+    # untouched and resume behavior is preserved.
+    random.Random(27).shuffle(pending)
+
     labeled, skipped, by_hero = dataset_totals()
 
     print("Kill-feed hero identity labeler")
@@ -638,6 +661,14 @@ def main():
     )
     print(
         "TAB with an empty input = repeat the previous hero label."
+    )
+    print(
+        "SPACE with an empty input = defer this sample for a later run "
+        "(it is NOT marked skipped)."
+    )
+    print(
+        "Pending samples are shuffled so long runs of the same hero are "
+        "spread out and you see more roster variety sooner."
     )
     print(
         "Already-used hero names support unique-prefix completion."
@@ -660,6 +691,7 @@ def main():
 
     last_label = None
     processed = 0
+    deferred = 0
 
     try:
         for index, sample in enumerate(
@@ -708,6 +740,10 @@ def main():
                 )
                 break
 
+            if action == "defer":
+                deferred += 1
+                continue
+
             if action == "skip":
                 mark_skipped(sample)
                 processed += 1
@@ -731,6 +767,9 @@ def main():
     print()
     print(
         f"Processed this run: {processed}"
+    )
+    print(
+        f"Deferred for later this run: {deferred}"
     )
     print(
         f"Total labeled: {labeled}"
