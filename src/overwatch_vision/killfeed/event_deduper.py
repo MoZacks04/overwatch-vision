@@ -11,7 +11,8 @@ from overwatch_vision.utils.image_ops import fingerprint_similarity
 @dataclass(slots=True)
 class RecentParsedEvent:
     timestamp: float
-    identity_key: str | None
+    hero_key: str | None
+    player_key: str | None
     fingerprint: np.ndarray | None
 
 
@@ -19,13 +20,15 @@ class ParsedEventDeduper:
     """
     Final duplicate guard after OCR/hero parsing.
 
-    Parsed identity helps confirm a duplicate, but identity alone is never
-    enough: legitimate eliminations can repeat the same hero/player pair.
-    The visible row fingerprint must also closely match within the time window.
+    Parsed identity is the primary duplicate signal inside the short
+    dedupe window. The same visible elimination can be recreated as several
+    track IDs while the row animates/fades, so requiring the row fingerprint
+    to remain almost identical is too strict.
 
-    This catches the common case where one visible kill-feed row is lost by
-    temporal tracking and recreated as a second track a few seconds later
-    without suppressing a different row that happens to involve the same hero.
+    Hero-pair identity is stored independently from OCR player names so a row
+    still dedupes when one parse reads a player name and another parse misses it.
+    Visual similarity remains a fallback for rows whose hero identity is not
+    available yet.
     """
 
     def __init__(self, config: dict):
@@ -57,30 +60,31 @@ class ParsedEventDeduper:
             value.lower(),
         )
 
-    def _identity_key(self, event) -> str | None:
+    def _player_key(self, event) -> str | None:
         killer_name = self._clean(event.killer_name)
         victim_name = self._clean(event.victim_name)
 
-        if killer_name and victim_name:
-            return (
-                "players:"
-                f"{killer_name}>{victim_name}:"
-                f"{event.killer_team or '?'}>"
-                f"{event.victim_team or '?'}"
-            )
+        if not killer_name or not victim_name:
+            return None
 
+        return (
+            f"{killer_name}>{victim_name}:"
+            f"{event.killer_team or '?'}>"
+            f"{event.victim_team or '?'}"
+        )
+
+    def _hero_key(self, event) -> str | None:
         killer_hero = self._clean(event.killer_hero)
         victim_hero = self._clean(event.victim_hero)
 
-        if killer_hero and victim_hero:
-            return (
-                "heroes:"
-                f"{killer_hero}>{victim_hero}:"
-                f"{event.killer_team or '?'}>"
-                f"{event.victim_team or '?'}"
-            )
+        if not killer_hero or not victim_hero:
+            return None
 
-        return None
+        return (
+            f"{killer_hero}>{victim_hero}:"
+            f"{event.killer_team or '?'}>"
+            f"{event.victim_team or '?'}"
+        )
 
     def _prune(self, timestamp: float):
         cutoff = timestamp - self.window_seconds
@@ -94,7 +98,8 @@ class ParsedEventDeduper:
         timestamp = float(event.timestamp)
         self._prune(timestamp)
 
-        identity_key = self._identity_key(event)
+        hero_key = self._hero_key(event)
+        player_key = self._player_key(event)
         fingerprint = getattr(
             event,
             "visual_fingerprint",
@@ -102,48 +107,46 @@ class ParsedEventDeduper:
         )
 
         for item in self.recent:
-            similarity = None
+            # Strong parsed identity wins inside the short dedupe window.
+            # This intentionally does NOT depend on the row fingerprint because
+            # the same feed entry changes appearance as it slides and fades.
+            if (
+                hero_key is not None
+                and item.hero_key is not None
+                and hero_key == item.hero_key
+            ):
+                return True
 
+            if (
+                player_key is not None
+                and item.player_key is not None
+                and player_key == item.player_key
+            ):
+                return True
+
+            # If either event lacks parsed identity, fall back to an almost
+            # identical visual match.
             if (
                 fingerprint is not None
                 and item.fingerprint is not None
+                and (
+                    hero_key is None
+                    or item.hero_key is None
+                )
             ):
                 similarity = fingerprint_similarity(
                     item.fingerprint,
                     fingerprint,
                 )
 
-            # Identity alone is NOT enough to call something a duplicate.
-            # Two legitimate eliminations can involve the same heroes/players
-            # within five seconds. Require the row pixels to agree as well.
-            if (
-                identity_key is not None
-                and item.identity_key is not None
-                and identity_key == item.identity_key
-                and similarity is not None
-                and similarity
-                >= self.identity_visual_similarity
-            ):
-                return True
-
-            # With incomplete OCR/hero identity, only suppress an almost
-            # identical visual row. This is intentionally strict so a fresh
-            # kill entering as another exits is not discarded.
-            if (
-                (
-                    identity_key is None
-                    or item.identity_key is None
-                )
-                and similarity is not None
-                and similarity
-                >= self.visual_similarity
-            ):
-                return True
+                if similarity >= self.visual_similarity:
+                    return True
 
         self.recent.append(
             RecentParsedEvent(
                 timestamp=timestamp,
-                identity_key=identity_key,
+                hero_key=hero_key,
+                player_key=player_key,
                 fingerprint=(
                     fingerprint.copy()
                     if fingerprint is not None
