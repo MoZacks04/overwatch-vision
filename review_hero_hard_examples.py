@@ -332,6 +332,96 @@ def make_preview(
                 1,
             )
 
+            hero_box = payload.get(
+                "hero_box_local"
+            )
+
+            if (
+                isinstance(
+                    hero_box,
+                    dict,
+                )
+                and all(
+                    key in hero_box
+                    for key in (
+                        "x1",
+                        "y1",
+                        "x2",
+                        "y2",
+                    )
+                )
+            ):
+                source_h, source_w = (
+                    row.shape[:2]
+                )
+                scale_x = (
+                    rw
+                    / max(
+                        1.0,
+                        float(source_w),
+                    )
+                )
+                scale_y = (
+                    rh
+                    / max(
+                        1.0,
+                        float(source_h),
+                    )
+                )
+
+                x1 = (
+                    rx
+                    + int(
+                        round(
+                            float(
+                                hero_box["x1"]
+                            )
+                            * scale_x
+                        )
+                    )
+                )
+                y1 = (
+                    ry
+                    + int(
+                        round(
+                            float(
+                                hero_box["y1"]
+                            )
+                            * scale_y
+                        )
+                    )
+                )
+                x2 = (
+                    rx
+                    + int(
+                        round(
+                            float(
+                                hero_box["x2"]
+                            )
+                            * scale_x
+                        )
+                    )
+                )
+                y2 = (
+                    ry
+                    + int(
+                        round(
+                            float(
+                                hero_box["y2"]
+                            )
+                            * scale_y
+                        )
+                    )
+                )
+
+                cv2.rectangle(
+                    canvas,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 255),
+                    2,
+                )
+
     # Exact runtime portrait crop.
     portrait_view = fit_image(
         portrait,
