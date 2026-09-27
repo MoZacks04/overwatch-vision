@@ -84,6 +84,18 @@ class KillFeedParser:
                 0.78,
             )
         )
+        self.hero_context_fraction = max(
+            0.0,
+            float(
+                config.get(
+                    "hero_classifier",
+                    {},
+                ).get(
+                    "context_fraction",
+                    0.12,
+                )
+            ),
+        )
 
         project_root = Path(__file__).resolve().parents[3]
         relative = str(
@@ -119,6 +131,45 @@ class KillFeedParser:
             return np.zeros((1, 1, 3), dtype=np.uint8)
 
         return image[y1:y2, x1:x2]
+
+    def _hero_crop(
+        self,
+        image: np.ndarray,
+        rect: Rect,
+    ) -> np.ndarray:
+        """
+        Crop a hero portrait with a small amount of real surrounding context.
+
+        The learned icon detector is intentionally tight. A little padding
+        makes identity recognition less sensitive to 1-3 px box differences
+        and matches the context-expanded crops used by the trainer.
+        """
+        h, w = image.shape[:2]
+
+        pad_x = int(
+            round(
+                max(1, rect.width)
+                * self.hero_context_fraction
+            )
+        )
+        pad_y = int(
+            round(
+                max(1, rect.height)
+                * self.hero_context_fraction
+            )
+        )
+
+        expanded = Rect(
+            x1=max(0, rect.x1 - pad_x),
+            y1=max(0, rect.y1 - pad_y),
+            x2=min(w, rect.x2 + pad_x),
+            y2=min(h, rect.y2 + pad_y),
+        )
+
+        return self._safe_crop(
+            image,
+            expanded,
+        )
 
     @staticmethod
     def _clean_name(text: str | None) -> str | None:
@@ -221,7 +272,7 @@ class KillFeedParser:
         # Preferred path: the detector already computed the exact hero box.
         # This guarantees parsing sees exactly the pixels outlined in yellow.
         if hero_box is not None:
-            hero = self._safe_crop(
+            hero = self._hero_crop(
                 row_image,
                 hero_box,
             )
@@ -431,11 +482,11 @@ class KillFeedParser:
             and row.victim_hero_box_local is not None
         ):
             return (
-                self._safe_crop(
+                self._hero_crop(
                     row.crop,
                     row.killer_hero_box_local,
                 ),
-                self._safe_crop(
+                self._hero_crop(
                     row.crop,
                     row.victim_hero_box_local,
                 ),
@@ -627,11 +678,11 @@ class KillFeedParser:
                     confidence=0.0,
                 )
 
-            killer_hero_crop = self._safe_crop(
+            killer_hero_crop = self._hero_crop(
                 row.crop,
                 row.killer_hero_box_local,
             )
-            victim_hero_crop = self._safe_crop(
+            victim_hero_crop = self._hero_crop(
                 row.crop,
                 row.victim_hero_box_local,
             )
