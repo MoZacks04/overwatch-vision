@@ -232,14 +232,15 @@ tracking:
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
   dedupe_seconds: 5.0
-  dedupe_similarity: 0.86
+  dedupe_similarity: 0.94
 
 event_dedupe:
-  # Final duplicate guard after names/heroes are parsed. Same player pair or
-  # hero pair will only be announced once inside this window. If identity is
-  # still unknown, the row's visual fingerprint is used as a fallback.
+  # Final duplicate guard after parsing. Identity alone is NOT considered a
+  # duplicate because two legitimate eliminations can involve the same heroes
+  # or players within the window. The visible row must also closely match.
   window_seconds: 5.0
-  visual_similarity: 0.86
+  identity_visual_similarity: 0.90
+  visual_similarity: 0.96
 
 audio:
   enabled: true
