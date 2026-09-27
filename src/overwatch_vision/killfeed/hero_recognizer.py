@@ -55,6 +55,23 @@ class HeroRecognizer:
             cfg.get("local_min_margin", 0.05)
         )
 
+        classifier_cfg = config.get(
+            "hero_classifier",
+            {},
+        )
+        self.consensus_min_confidence = float(
+            classifier_cfg.get(
+                "consensus_min_confidence",
+                0.55,
+            )
+        )
+        self.consensus_min_margin = float(
+            classifier_cfg.get(
+                "consensus_min_margin",
+                0.03,
+            )
+        )
+
         project_root = Path(__file__).resolve().parents[3]
         cache_relative = str(
             cfg.get("cache_directory", ".cache/hero_portraits")
@@ -403,6 +420,41 @@ class HeroRecognizer:
         if a.size == 0 or b.size == 0:
             return -1.0
         return float(np.dot(a, b))
+
+    def recognize_for_consensus(
+        self,
+        image: np.ndarray,
+    ) -> tuple[str | None, float]:
+        """
+        Use the trained CNN's soft top prediction for multi-frame consensus.
+
+        Single-frame recognition remains conservative. Across several frames
+        of the SAME tracked row, however, consistently repeating a slightly
+        softer CNN prediction is useful evidence and should not be discarded
+        before the consensus stage sees it.
+        """
+        if not self.enabled:
+            return None, 0.0
+
+        name, confidence, margin = (
+            self.trained_classifier.predict_raw(
+                image
+            )
+        )
+
+        if name is not None:
+            if (
+                confidence
+                >= self.consensus_min_confidence
+                and margin
+                >= self.consensus_min_margin
+            ):
+                return name, confidence
+
+            return None, confidence
+
+        # If no trained model is available, preserve the old behavior.
+        return self.recognize(image)
 
     def recognize(
         self,
