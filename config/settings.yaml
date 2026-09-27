@@ -160,7 +160,9 @@ hero_icon_localizer:
   # geometry replaces the older hand-estimated K/V boxes.
   min_confidence: 0.20
   iou_threshold: 0.45
-  imgsz: 640
+  # Portraits occupy a large fraction of the already-cropped row, so 416
+  # preserves detail while cutting the CPU cost of this second YOLO stage.
+  imgsz: 416
   max_det: 4
 
 killfeed_row_verifier:
