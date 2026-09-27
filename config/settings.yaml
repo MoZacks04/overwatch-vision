@@ -185,6 +185,11 @@ hero_classifier:
   labels_path: "models/killfeed_hero_classifier_labels.json"
   input_size: 64
 
+  # Include a little real row context around the detected icon. The trainer
+  # rebuilds the same expanded crop from the saved row annotations, so no
+  # relabeling is required.
+  context_fraction: 0.12
+
   # Be conservative: an uncertain classifier result becomes "unknown" rather
   # than a confidently wrong spoken hero name.
   min_confidence: 0.86
@@ -218,6 +223,11 @@ tracking:
   max_vertical_shift_fraction: 0.24
   fingerprint_size: 16
   fingerprint_match_threshold: 0.75
+
+  # After a track has already produced an event, require a stronger raw visual
+  # match before a row may keep that track ID. This prevents a brand-new kill
+  # entering as an old row exits from inheriting emitted=True and going silent.
+  emitted_match_visual_threshold: 0.84
 
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
