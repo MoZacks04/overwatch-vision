@@ -60,6 +60,11 @@ class KillFeedRow:
     killer_hero_box_local: Optional[Rect] = None
     victim_hero_box_local: Optional[Rect] = None
 
+    # Stable visual signature built from the two detected hero portraits.
+    # Used by tracking to keep one animated kill-feed entry on one track even
+    # when the full row's text/background fingerprint changes significantly.
+    hero_pair_fingerprint: Optional[np.ndarray] = None
+
     score: float = 0.0
 
 
