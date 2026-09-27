@@ -199,31 +199,18 @@ class HeroHardExampleCollector:
         )
         temp.replace(path)
 
-    def _should_collect(
+    def _uncertainty_reason(
         self,
         confidence: float,
         margin: float,
-    ) -> tuple[bool, str]:
-        if (
-            confidence
-            < self.max_confidence
-        ):
-            return True, "low_confidence"
+    ) -> str | None:
+        if confidence < self.max_confidence:
+            return "low_confidence"
 
         if margin < self.max_margin:
-            return True, "low_margin"
+            return "low_margin"
 
-        self._candidate_counter += 1
-
-        if (
-            self.confident_sample_every > 0
-            and self._candidate_counter
-            % self.confident_sample_every
-            == 0
-        ):
-            return True, "confident_audit"
-
-        return False, ""
+        return None
 
     def _save_identity_sample(
         self,
@@ -450,7 +437,8 @@ class HeroHardExampleCollector:
             "killer",
             "victim",
         ):
-            candidates = []
+            all_candidates = []
+            hard_candidates = []
 
             for frame_index, row in enumerate(
                 rows
@@ -501,47 +489,86 @@ class HeroHardExampleCollector:
                     margin,
                 ) = prediction
 
-                should_collect, reason = (
-                    self._should_collect(
+                hardness = (
+                    margin,
+                    best_score,
+                )
+                candidate = (
+                    hardness,
+                    row,
+                    crop,
+                    box,
+                    prediction,
+                    frame_index,
+                )
+                all_candidates.append(
+                    candidate
+                )
+
+                reason = (
+                    self._uncertainty_reason(
                         best_score,
                         margin,
                     )
                 )
 
-                if not should_collect:
-                    continue
-
-                # Lowest margin is usually the most informative ambiguous
-                # example; confidence breaks ties.
-                hardness = (
-                    margin,
-                    best_score,
-                )
-                candidates.append(
-                    (
-                        hardness,
-                        row,
-                        crop,
-                        box,
-                        prediction,
-                        reason,
-                        frame_index,
+                if reason is not None:
+                    hard_candidates.append(
+                        candidate
+                        + (reason,)
                     )
-                )
 
-            if candidates:
-                candidates.sort(
+            selected = None
+
+            if hard_candidates:
+                hard_candidates.sort(
                     key=lambda item: item[0]
                 )
+                selected = hard_candidates[0]
+            elif all_candidates:
+                consensus_hero = (
+                    event.killer_hero
+                    if side == "killer"
+                    else event.victim_hero
+                )
+
+                if not consensus_hero:
+                    all_candidates.sort(
+                        key=lambda item: item[0]
+                    )
+                    selected = (
+                        all_candidates[0]
+                        + ("consensus_unresolved",)
+                    )
+                else:
+                    # Audit confident predictions sparsely, once per parsed
+                    # side rather than once per consensus frame.
+                    self._candidate_counter += 1
+
+                    if (
+                        self.confident_sample_every > 0
+                        and self._candidate_counter
+                        % self.confident_sample_every
+                        == 0
+                    ):
+                        all_candidates.sort(
+                            key=lambda item: item[0]
+                        )
+                        selected = (
+                            all_candidates[0]
+                            + ("confident_audit",)
+                        )
+
+            if selected is not None:
                 (
                     _hardness,
                     row,
                     crop,
                     box,
                     prediction,
-                    reason,
                     frame_index,
-                ) = candidates[0]
+                    reason,
+                ) = selected
 
                 team = (
                     row.killer_team_hint
