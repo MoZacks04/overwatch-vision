@@ -390,7 +390,7 @@ def make_preview(
         canvas,
         (
             "ENTER save label | TAB accept model guess | "
-            "SPACE defer | B bad box | X discard | ESC quit"
+            "SPACE defer | [ bad box | X discard | ESC quit"
         ),
         (24, footer_y + 70),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -487,10 +487,7 @@ def prompt_label(
             return "defer", None
 
         if (
-            code in (
-                ord("b"),
-                ord("B"),
-            )
+            code == ord("[")
             and not typed
         ):
             return "bad_box", None
@@ -727,7 +724,7 @@ def main():
     )
     print(
         "ENTER save | TAB accept model guess | SPACE defer | "
-        "B bad box | X discard | ESC quit"
+        "[ bad box | X discard | ESC quit"
     )
     print()
 
