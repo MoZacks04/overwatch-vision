@@ -202,6 +202,27 @@ hero_classifier:
   consensus_min_confidence: 0.55
   consensus_min_margin: 0.03
 
+hard_example_collection:
+  # While playing, automatically save difficult live hero portraits for later
+  # review. These files are local-only under datasets/ and do not affect the
+  # running classifier until you label them and retrain.
+  enabled: true
+  directory: "datasets/killfeed_hard_examples"
+
+  # Save portraits that the trained CNN is not comfortably separating.
+  uncertain_below_confidence: 0.88
+  uncertain_below_margin: 0.15
+
+  # Also keep one occasional high-confidence prediction so confidently-wrong
+  # errors can be discovered instead of only mining low-confidence examples.
+  confident_sample_every: 25
+
+  # Avoid filling the review queue with near-identical copies of the same
+  # portrait while a feed entry animates or is accidentally retracked.
+  recent_dedupe_seconds: 12.0
+  recent_dedupe_similarity: 0.97
+  fingerprint_size: 24
+
 hero_recognition:
   enabled: true
   heroes_api_url: "https://overfast-api.tekrop.fr/heroes"
