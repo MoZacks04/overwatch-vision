@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import queue
 import threading
 
+from overwatch_vision.killfeed.hard_examples import HeroHardExampleCollector
 from overwatch_vision.killfeed.parser import KillFeedParser
 from overwatch_vision.models import KillFeedEvent, KillFeedRow, Rect
 
@@ -27,6 +28,11 @@ class AsyncKillFeedParser:
     def __init__(self, config: dict, parser: KillFeedParser):
         self.config = config
         self.parser = parser
+        self.hard_examples = (
+            HeroHardExampleCollector(
+                config
+            )
+        )
 
         self._jobs: queue.Queue[ParseJob | None] = queue.Queue()
         self._results: queue.Queue[KillFeedEvent] = queue.Queue()
@@ -78,6 +84,11 @@ class AsyncKillFeedParser:
             victim_hero_box_local=(
                 cls._copy_rect(row.victim_hero_box_local)
                 if row.victim_hero_box_local is not None
+                else None
+            ),
+            hero_pair_fingerprint=(
+                row.hero_pair_fingerprint.copy()
+                if row.hero_pair_fingerprint is not None
                 else None
             ),
             score=row.score,
@@ -184,6 +195,18 @@ class AsyncKillFeedParser:
                     job.rows
                 )
                 self._apply_parse(job.event, parsed)
+
+                try:
+                    self.hard_examples.collect(
+                        job.event,
+                        job.rows,
+                        self.parser,
+                    )
+                except Exception as exc:
+                    print(
+                        "[hard-examples] collection failed for "
+                        f"track {job.event.track_id}: {exc}"
+                    )
             except Exception as exc:
                 print(
                     "[killfeed-parser] parse failed for "
