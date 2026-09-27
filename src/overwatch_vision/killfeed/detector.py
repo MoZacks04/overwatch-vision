@@ -729,6 +729,78 @@ class KillFeedDetector:
             "pairs": learned_pairs,
         }
 
+    def _apply_hero_pair_fingerprints(
+        self,
+        rows,
+        fingerprint_size,
+    ):
+        """
+        Build a tracking signature from the two portrait crops.
+
+        The full row changes as text fades/slides, while the hero portraits are
+        much more stable. Concatenating the two portrait fingerprints gives the
+        tracker a better way to recognize the same kill-feed entry over time.
+        """
+        for row in rows:
+            killer_box = row.killer_hero_box_local
+            victim_box = row.victim_hero_box_local
+
+            if (
+                killer_box is None
+                or victim_box is None
+            ):
+                row.hero_pair_fingerprint = None
+                continue
+
+            h, w = row.crop.shape[:2]
+
+            def crop_box(box):
+                x1 = max(0, min(w, box.x1))
+                y1 = max(0, min(h, box.y1))
+                x2 = max(0, min(w, box.x2))
+                y2 = max(0, min(h, box.y2))
+
+                if x2 <= x1 or y2 <= y1:
+                    return None
+
+                return row.crop[
+                    y1:y2,
+                    x1:x2,
+                ]
+
+            killer_crop = crop_box(
+                killer_box
+            )
+            victim_crop = crop_box(
+                victim_box
+            )
+
+            if (
+                killer_crop is None
+                or victim_crop is None
+                or killer_crop.size == 0
+                or victim_crop.size == 0
+            ):
+                row.hero_pair_fingerprint = None
+                continue
+
+            killer_fp = grayscale_fingerprint(
+                killer_crop,
+                size=fingerprint_size,
+            )
+            victim_fp = grayscale_fingerprint(
+                victim_crop,
+                size=fingerprint_size,
+            )
+
+            row.hero_pair_fingerprint = np.concatenate(
+                [
+                    killer_fp,
+                    victim_fp,
+                ],
+                axis=1,
+            )
+
     def get_track_row(self, track_id):
         for track in self.tracker.tracks:
             if track.track_id == track_id:
@@ -888,6 +960,11 @@ class KillFeedDetector:
             self._apply_learned_hero_boxes(
                 rows
             )
+        )
+
+        self._apply_hero_pair_fingerprints(
+            rows,
+            fingerprint_size,
         )
 
         events = self.tracker.update(
