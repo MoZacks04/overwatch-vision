@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import json
 from pathlib import Path
 import random
@@ -26,26 +27,140 @@ DEFAULT_LABELS = (
     / "models"
     / "killfeed_hero_classifier_labels.json"
 )
+IDENTITY_ANNOTATION_DIR = (
+    PROJECT_ROOT
+    / "datasets"
+    / "killfeed_hero_identity"
+    / "annotations"
+)
+SOURCE_ROW_DIR = (
+    PROJECT_ROOT
+    / "datasets"
+    / "killfeed_hero_icons"
+    / "images"
+)
 
 
-def load_image(path: Path, size: int) -> np.ndarray:
-    image = cv2.imread(
-        str(path),
-        cv2.IMREAD_COLOR,
+@lru_cache(maxsize=4096)
+def load_image(
+    path_text: str,
+    size: int,
+    context_fraction: float,
+) -> np.ndarray:
+    """
+    Rebuild each training crop from the original kill-feed row when metadata
+    is available. This lets us add real surrounding pixels without asking the
+    user to relabel anything.
+    """
+    path = Path(path_text)
+    image = None
+
+    annotation = (
+        IDENTITY_ANNOTATION_DIR
+        / f"{path.stem}.json"
     )
+
+    if annotation.exists():
+        try:
+            payload = json.loads(
+                annotation.read_text(
+                    encoding="utf-8"
+                )
+            )
+            source_name = str(
+                payload.get(
+                    "source_row_image",
+                    "",
+                )
+            ).strip()
+            box = payload.get(
+                "source_box",
+                {},
+            )
+            source_path = (
+                SOURCE_ROW_DIR
+                / source_name
+            )
+            row = cv2.imread(
+                str(source_path),
+                cv2.IMREAD_COLOR,
+            )
+
+            if (
+                row is not None
+                and all(
+                    key in box
+                    for key in (
+                        "x1",
+                        "y1",
+                        "x2",
+                        "y2",
+                    )
+                )
+            ):
+                h, w = row.shape[:2]
+                x1 = int(box["x1"])
+                y1 = int(box["y1"])
+                x2 = int(box["x2"])
+                y2 = int(box["y2"])
+
+                box_w = max(1, x2 - x1)
+                box_h = max(1, y2 - y1)
+                pad_x = int(
+                    round(
+                        box_w
+                        * context_fraction
+                    )
+                )
+                pad_y = int(
+                    round(
+                        box_h
+                        * context_fraction
+                    )
+                )
+
+                x1 = max(0, x1 - pad_x)
+                y1 = max(0, y1 - pad_y)
+                x2 = min(w, x2 + pad_x)
+                y2 = min(h, y2 + pad_y)
+
+                if x2 > x1 and y2 > y1:
+                    image = row[
+                        y1:y2,
+                        x1:x2,
+                    ].copy()
+        except Exception:
+            image = None
+
     if image is None:
-        raise ValueError(f"Could not read {path}")
+        image = cv2.imread(
+            str(path),
+            cv2.IMREAD_COLOR,
+        )
 
+    if image is None:
+        raise ValueError(
+            f"Could not read {path}"
+        )
+
+    # Keep the whole portrait/context crop. Center-cropping effectively zoomed
+    # in and made the classifier sensitive to small detector-box differences.
     h, w = image.shape[:2]
-    side = min(h, w)
+    side = max(h, w)
 
-    x1 = max(0, (w - side) // 2)
-    y1 = max(0, (h - side) // 2)
+    pad_top = (side - h) // 2
+    pad_bottom = side - h - pad_top
+    pad_left = (side - w) // 2
+    pad_right = side - w - pad_left
 
-    image = image[
-        y1:y1 + side,
-        x1:x1 + side,
-    ]
+    image = cv2.copyMakeBorder(
+        image,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        borderType=cv2.BORDER_REPLICATE,
+    )
 
     return cv2.resize(
         image,
@@ -62,6 +177,40 @@ def augment(image: np.ndarray) -> np.ndarray:
     out = out * contrast + brightness
     out = np.clip(out, 0, 255).astype(np.uint8)
 
+    # Team-color backgrounds can otherwise become an accidental shortcut.
+    # Mild hue/saturation jitter keeps hero structure useful while making
+    # red-vs-blue framing much less predictive.
+    if random.random() < 0.70:
+        hsv = cv2.cvtColor(
+            out,
+            cv2.COLOR_BGR2HSV,
+        ).astype(np.float32)
+
+        hue_shift = random.uniform(
+            -4.0,
+            4.0,
+        )
+        saturation_scale = random.uniform(
+            0.60,
+            1.35,
+        )
+
+        hsv[:, :, 0] = (
+            hsv[:, :, 0]
+            + hue_shift
+        ) % 180.0
+        hsv[:, :, 1] = np.clip(
+            hsv[:, :, 1]
+            * saturation_scale,
+            0,
+            255,
+        )
+
+        out = cv2.cvtColor(
+            hsv.astype(np.uint8),
+            cv2.COLOR_HSV2BGR,
+        )
+
     if random.random() < 0.45:
         sigma = random.uniform(0.2, 0.8)
         out = cv2.GaussianBlur(
@@ -74,11 +223,12 @@ def augment(image: np.ndarray) -> np.ndarray:
     dx = random.randint(-2, 2)
     dy = random.randint(-2, 2)
     angle = random.uniform(-2.0, 2.0)
+    scale = random.uniform(0.90, 1.06)
 
     matrix = cv2.getRotationMatrix2D(
         (w / 2.0, h / 2.0),
         angle,
-        1.0,
+        scale,
     )
     matrix[0, 2] += dx
     matrix[1, 2] += dy
@@ -216,6 +366,15 @@ def main():
         type=float,
         default=0.20,
     )
+    parser.add_argument(
+        "--context-fraction",
+        type=float,
+        default=0.12,
+        help=(
+            "Fraction of the labeled hero box to include as real surrounding "
+            "context on each side."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -237,6 +396,11 @@ def main():
     )
 
     print()
+    print(
+        "Training crop context: "
+        f"{float(args.context_fraction):.0%} per side "
+        "(rebuilt from original row annotations when available)"
+    )
     print("Labeled hero classes:")
     for name in classes:
         count = len(paths_by_class[name])
@@ -272,9 +436,12 @@ def main():
         def __getitem__(self, index):
             path, label = self.items[index]
             image = load_image(
-                path,
+                str(path),
                 args.input_size,
-            )
+                float(
+                    args.context_fraction
+                ),
+            ).copy()
 
             if self.training:
                 image = augment(image)
