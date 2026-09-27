@@ -287,8 +287,18 @@ def main():
             2.0,
         )
     )
+    max_announcement_age_seconds = float(
+        audio_cfg.get(
+            "max_announcement_age_seconds",
+            5.0,
+        )
+    )
 
     session_start = time.monotonic()
+    baseline_cutoff = (
+        session_start
+        + suppress_first_seconds
+    )
     previous_time = time.perf_counter()
     smoothed_fps = 0.0
 
@@ -390,15 +400,26 @@ def main():
                     timestamp=game_frame.timestamp,
                 )
 
-                baseline_complete = (
-                    time.monotonic() - session_start
-                    >= suppress_first_seconds
-                )
-
                 for event in raw_events:
-                    if not baseline_complete:
+                    # Rows that were already present during startup are
+                    # baseline state, even if tracking only confirms them a
+                    # little later. Never queue those old rows for speech.
+                    track = next(
+                        (
+                            item
+                            for item in killfeed.tracker.tracks
+                            if item.track_id == event.track_id
+                        ),
+                        None,
+                    )
+
+                    if (
+                        track is not None
+                        and track.first_seen
+                        <= baseline_cutoff
+                    ):
                         print(
-                            "[killfeed] baseline row ignored "
+                            "[killfeed] startup baseline row ignored "
                             f"track={event.track_id}"
                         )
                         continue
@@ -478,6 +499,17 @@ def main():
                     )
                     continue
 
+                event_age = max(
+                    0.0,
+                    time.monotonic()
+                    - float(event.timestamp),
+                )
+                stale_for_audio = (
+                    max_announcement_age_seconds > 0
+                    and event_age
+                    > max_announcement_age_seconds
+                )
+
                 console_text = _event_console_text(event)
                 print(
                     f"[killfeed] track={event.track_id} "
@@ -500,7 +532,13 @@ def main():
                         require_both_heroes=require_both_heroes,
                     )
 
-                if speech:
+                if speech and stale_for_audio:
+                    print(
+                        "[audio] stale event not announced "
+                        f"(age={event_age:.1f}s, "
+                        f"limit={max_announcement_age_seconds:.1f}s)"
+                    )
+                elif speech:
                     print(
                         f"[audio] queued: {speech}"
                     )
@@ -574,6 +612,10 @@ def main():
                 killfeed.reset()
                 event_deduper.reset()
                 session_start = time.monotonic()
+                baseline_cutoff = (
+                    session_start
+                    + suppress_first_seconds
+                )
                 print("[killfeed] tracker + event dedupe reset")
 
             elapsed = time.perf_counter() - loop_start
