@@ -78,17 +78,36 @@ def load_image(
                 "source_box",
                 {},
             )
-            source_path = (
-                SOURCE_ROW_DIR
-                / source_name
-            )
-            row = cv2.imread(
-                str(source_path),
-                cv2.IMREAD_COLOR,
-            )
+
+            # Live hard examples are already saved as the exact contextual
+            # crop seen by the runtime classifier. Do not try to reconstruct
+            # them from the original hand-labeled row dataset.
+            row = None
+
+            if (
+                source_name
+                and not bool(
+                    payload.get(
+                        "hard_example",
+                        False,
+                    )
+                )
+            ):
+                source_path = (
+                    SOURCE_ROW_DIR
+                    / source_name
+                )
+                row = cv2.imread(
+                    str(source_path),
+                    cv2.IMREAD_COLOR,
+                )
 
             if (
                 row is not None
+                and isinstance(
+                    box,
+                    dict,
+                )
                 and all(
                     key in box
                     for key in (
