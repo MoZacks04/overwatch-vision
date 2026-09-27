@@ -93,7 +93,7 @@ killfeed_parse:
   hero_consensus_frames: 5
   hero_consensus_min_votes: 3
   hero_consensus_min_fraction: 0.60
-  hero_consensus_min_average_confidence: 0.78
+  hero_consensus_min_average_confidence: 0.65
 
   # Do not accept arbitrary OCR guesses for player handles.
   min_name_confidence: 0.55
@@ -195,6 +195,12 @@ hero_classifier:
   # correct predictions before temporal consensus can combine them.
   min_confidence: 0.78
   min_margin: 0.08
+
+  # Softer per-frame predictions can participate in temporal consensus. They
+  # still need a real lead over second place, and the same hero must repeat
+  # across multiple snapshots before it is accepted.
+  consensus_min_confidence: 0.55
+  consensus_min_margin: 0.03
 
 hero_recognition:
   enabled: true
