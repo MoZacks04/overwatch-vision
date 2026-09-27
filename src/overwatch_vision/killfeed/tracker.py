@@ -19,6 +19,15 @@ class KillFeedTracker:
         cfg = config["tracking"]
 
         self.confirmation_frames = int(cfg["confirmation_frames"])
+        self.emission_frames = max(
+            self.confirmation_frames,
+            int(
+                cfg.get(
+                    "emission_frames",
+                    self.confirmation_frames,
+                )
+            ),
+        )
         self.expire_after = int(cfg["missing_frames_before_expire"])
         self.max_vertical_shift_fraction = float(
             cfg["max_vertical_shift_fraction"]
@@ -34,6 +43,18 @@ class KillFeedTracker:
             cfg.get(
                 "emitted_match_visual_threshold",
                 0.84,
+            )
+        )
+        self.emitted_match_hero_threshold = float(
+            cfg.get(
+                "emitted_match_hero_threshold",
+                0.90,
+            )
+        )
+        self.emitted_match_max_shift_rows = float(
+            cfg.get(
+                "emitted_match_max_shift_rows",
+                0.85,
             )
         )
 
@@ -132,24 +153,74 @@ class KillFeedTracker:
                     row.fingerprint,
                 )
 
-                # The ordinary matcher deliberately allows some visual drift so
-                # animated/fading rows keep their track. That is too permissive
-                # after an event has already been emitted: a different kill can
-                # enter at the same Y position and otherwise look structurally
-                # similar. Require a strong raw appearance match before an
-                # emitted track is allowed to absorb the new row.
-                if (
-                    track.emitted
-                    and visual
-                    < self.emitted_match_visual_threshold
-                ):
-                    continue
-
                 score = self._match_score(
                     track.row,
                     row,
                     roi_height,
                 )
+
+                if track.emitted:
+                    hero_visual = 0.0
+
+                    if (
+                        track.row.hero_pair_fingerprint
+                        is not None
+                        and row.hero_pair_fingerprint
+                        is not None
+                    ):
+                        hero_visual = fingerprint_similarity(
+                            track.row.hero_pair_fingerprint,
+                            row.hero_pair_fingerprint,
+                        )
+
+                    reference_height = max(
+                        1.0,
+                        (
+                            track.row.bbox_roi.height
+                            + row.bbox_roi.height
+                        )
+                        / 2.0,
+                    )
+                    shift_rows = (
+                        abs(
+                            track.row.bbox_roi.cy
+                            - row.bbox_roi.cy
+                        )
+                        / reference_height
+                    )
+
+                    full_row_match = (
+                        visual
+                        >= self.emitted_match_visual_threshold
+                    )
+                    hero_continuity_match = (
+                        hero_visual
+                        >= self.emitted_match_hero_threshold
+                        and shift_rows
+                        <= self.emitted_match_max_shift_rows
+                    )
+
+                    if (
+                        not full_row_match
+                        and not hero_continuity_match
+                    ):
+                        continue
+
+                    if hero_continuity_match:
+                        continuity = max(
+                            0.0,
+                            1.0
+                            - shift_rows
+                            / max(
+                                0.01,
+                                self.emitted_match_max_shift_rows,
+                            ),
+                        )
+                        score = max(
+                            score,
+                            0.88 * hero_visual
+                            + 0.12 * continuity,
+                        )
 
                 if score >= self.match_threshold:
                     candidate_pairs.append(
@@ -186,9 +257,15 @@ class KillFeedTracker:
             ):
                 track.confirmed = True
 
-            if track.confirmed and not track.emitted:
-                # Mark this track as handled either way. If it visually
-                # duplicates a row emitted moments ago, silently suppress it.
+            if (
+                track.confirmed
+                and not track.emitted
+                and track.age_frames
+                >= self.emission_frames
+            ):
+                # Wait for enough snapshots to fill the hero-consensus window
+                # before parsing/announcing. At ~15 detector updates per second,
+                # five observations is still only about a third of a second.
                 track.emitted = True
 
                 if self._is_recent_duplicate(
