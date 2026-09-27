@@ -590,40 +590,25 @@ class KillFeedParser:
         killer_votes = []
         victim_votes = []
 
-        # Include the newest row's already-computed recognition result.
-        if parsed.killer_hero:
-            killer_votes.append(
-                (
-                    parsed.killer_hero,
-                    parsed.killer_hero_confidence,
-                )
-            )
-        if parsed.victim_hero:
-            victim_votes.append(
-                (
-                    parsed.victim_hero,
-                    parsed.victim_hero_confidence,
-                )
-            )
-
-        # Re-check hero identity on prior frames only. Hero matching is cheap
-        # compared with OCR and gives us temporal consensus instead of trusting
-        # one possibly blurred/animated portrait crop.
-        for row in rows[:-1]:
+        # Build hero identity from ALL snapshots using the trained CNN's softer
+        # top prediction. Single-frame recognition is intentionally strict, but
+        # throwing away every 0.60-0.77 prediction before temporal consensus
+        # means several consistent frames can never rescue one another.
+        for row in rows:
             killer_crop, victim_crop = (
                 self._hero_crops_for_row(row)
             )
 
             if killer_crop is not None:
                 killer_votes.append(
-                    self.hero_recognizer.recognize(
+                    self.hero_recognizer.recognize_for_consensus(
                         killer_crop
                     )
                 )
 
             if victim_crop is not None:
                 victim_votes.append(
-                    self.hero_recognizer.recognize(
+                    self.hero_recognizer.recognize_for_consensus(
                         victim_crop
                     )
                 )
