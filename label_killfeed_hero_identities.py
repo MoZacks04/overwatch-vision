@@ -418,7 +418,7 @@ def make_preview(
         canvas,
         (
             "ENTER save | empty ENTER skip | BACKSPACE edit | "
-            f"R repeat last [{repeat_text}] | ESC quit"
+            f"TAB repeat last [{repeat_text}] | ESC quit"
         ),
         (24, footer_y + 76),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -476,7 +476,7 @@ def prompt_label(
             return "quit", None
 
         if (
-            code in (ord("r"), ord("R"))
+            code == 9
             and not typed
             and last_label
         ):
@@ -637,7 +637,7 @@ def main():
         "Empty Enter = skip if the hero genuinely cannot be identified."
     )
     print(
-        "R with an empty input = repeat the previous hero label."
+        "TAB with an empty input = repeat the previous hero label."
     )
     print(
         "Already-used hero names support unique-prefix completion."
