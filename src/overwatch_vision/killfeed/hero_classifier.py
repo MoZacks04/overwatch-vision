@@ -125,16 +125,26 @@ class TrainedHeroClassifier:
         if square.ndim == 3 and square.shape[2] == 4:
             square = square[:, :, :3]
 
+        # Preserve the entire detected portrait + context instead of
+        # center-cropping it. Runtime YOLO boxes can differ by a few pixels
+        # from the hand-labeled training boxes; letterboxing keeps those edge
+        # cues instead of effectively zooming further into the face.
         h, w = square.shape[:2]
-        side = min(h, w)
+        side = max(h, w)
 
-        x1 = max(0, (w - side) // 2)
-        y1 = max(0, (h - side) // 2)
+        pad_top = (side - h) // 2
+        pad_bottom = side - h - pad_top
+        pad_left = (side - w) // 2
+        pad_right = side - w - pad_left
 
-        square = square[
-            y1:y1 + side,
-            x1:x1 + side,
-        ]
+        square = cv2.copyMakeBorder(
+            square,
+            pad_top,
+            pad_bottom,
+            pad_left,
+            pad_right,
+            borderType=cv2.BORDER_REPLICATE,
+        )
 
         square = cv2.resize(
             square,
