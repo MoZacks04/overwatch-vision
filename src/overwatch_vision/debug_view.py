@@ -236,7 +236,10 @@ class DebugView:
             True,
         ):
             for track in active_tracks:
-                if not track.confirmed:
+                if (
+                    not track.confirmed
+                    or track.missing_frames > 0
+                ):
                     continue
 
                 row = track.row
@@ -344,7 +347,10 @@ class DebugView:
             True,
         ):
             for track in active_tracks:
-                if not track.confirmed:
+                if (
+                    not track.confirmed
+                    or track.missing_frames > 0
+                ):
                     continue
 
                 row = track.row
