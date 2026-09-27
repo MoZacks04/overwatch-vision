@@ -5,6 +5,7 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import random
+import re
 
 import cv2
 import numpy as np
@@ -288,41 +289,185 @@ def discover_dataset(root: Path):
     return classes, paths_by_class
 
 
+@lru_cache(maxsize=4096)
+def sample_timestamp(path_text: str) -> int | None:
+    """
+    Recover the original gameplay-frame timestamp from the saved identity
+    annotation/source row name. Nearby frames from the same kill-feed event
+    must stay on the same side of the train/validation split.
+    """
+    path = Path(path_text)
+    annotation = (
+        IDENTITY_ANNOTATION_DIR
+        / f"{path.stem}.json"
+    )
+
+    candidates = [path.stem]
+
+    if annotation.exists():
+        try:
+            payload = json.loads(
+                annotation.read_text(
+                    encoding="utf-8"
+                )
+            )
+            candidates.append(
+                str(
+                    payload.get(
+                        "source_row_image",
+                        "",
+                    )
+                )
+            )
+            candidates.append(
+                str(
+                    payload.get(
+                        "source_annotation",
+                        "",
+                    )
+                )
+            )
+        except Exception:
+            pass
+
+    for value in candidates:
+        match = re.search(
+            r"(\d{12,})",
+            value,
+        )
+
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                pass
+
+    return None
+
+
+def temporal_groups(
+    paths,
+    max_gap_ms: int,
+):
+    stamped = []
+    unstamped = []
+
+    for path in paths:
+        stamp = sample_timestamp(
+            str(path)
+        )
+
+        if stamp is None:
+            unstamped.append(path)
+        else:
+            stamped.append(
+                (stamp, path)
+            )
+
+    stamped.sort(
+        key=lambda item: item[0]
+    )
+
+    groups = []
+    current = []
+    previous = None
+
+    for stamp, path in stamped:
+        if (
+            current
+            and previous is not None
+            and stamp - previous
+            > max_gap_ms
+        ):
+            groups.append(current)
+            current = []
+
+        current.append(path)
+        previous = stamp
+
+    if current:
+        groups.append(current)
+
+    # Unknown timestamps cannot safely be grouped, so keep each as its own
+    # group rather than pretending unrelated samples are one event.
+    groups.extend(
+        [[path]]
+        for path in unstamped
+    )
+
+    return groups
+
+
 def split_paths(
     classes,
     paths_by_class,
     validation_fraction: float,
+    group_gap_ms: int,
 ):
     train = []
     validation = []
+    group_counts = {}
+
+    rng = random.Random(17)
 
     for class_index, name in enumerate(classes):
-        paths = list(paths_by_class[name])
-        random.shuffle(paths)
+        paths = list(
+            paths_by_class[name]
+        )
+        groups = temporal_groups(
+            paths,
+            group_gap_ms,
+        )
+        group_counts[name] = len(groups)
 
-        if len(paths) >= 5:
-            val_count = max(
-                1,
-                int(
-                    round(
-                        len(paths)
-                        * validation_fraction
-                    )
-                ),
+        rng.shuffle(groups)
+
+        # Validation must contain whole temporal groups. Keep at least one
+        # group for training. Classes represented by only one gameplay event
+        # cannot honestly be validated yet.
+        target_validation = int(
+            round(
+                len(paths)
+                * validation_fraction
             )
-        else:
-            val_count = 0
-
-        validation.extend(
-            (path, class_index)
-            for path in paths[:val_count]
-        )
-        train.extend(
-            (path, class_index)
-            for path in paths[val_count:]
         )
 
-    return train, validation
+        selected_validation = []
+        selected_count = 0
+
+        while (
+            len(groups) > 1
+            and selected_count
+            < target_validation
+        ):
+            group = groups.pop()
+            selected_validation.append(
+                group
+            )
+            selected_count += len(
+                group
+            )
+
+        for group in selected_validation:
+            validation.extend(
+                (path, class_index)
+                for path in group
+            )
+
+        for group in groups:
+            train.extend(
+                (path, class_index)
+                for path in group
+            )
+
+    rng.shuffle(train)
+    rng.shuffle(validation)
+
+    return (
+        train,
+        validation,
+        group_counts,
+    )
 
 
 def main():
@@ -349,7 +494,7 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=35,
+        default=45,
     )
     parser.add_argument(
         "--batch-size",
@@ -359,12 +504,21 @@ def main():
     parser.add_argument(
         "--input-size",
         type=int,
-        default=64,
+        default=96,
     )
     parser.add_argument(
         "--validation-fraction",
         type=float,
         default=0.20,
+    )
+    parser.add_argument(
+        "--group-gap-ms",
+        type=int,
+        default=2500,
+        help=(
+            "Samples captured within this time gap are treated as one "
+            "kill-feed event and never split across train/validation."
+        ),
     )
     parser.add_argument(
         "--context-fraction",
@@ -380,7 +534,11 @@ def main():
     try:
         import torch
         import torch.nn as nn
-        from torch.utils.data import DataLoader, Dataset
+        from torch.utils.data import (
+            DataLoader,
+            Dataset,
+            WeightedRandomSampler,
+        )
     except Exception as exc:
         raise SystemExit(
             "PyTorch is required for training. "
@@ -414,10 +572,36 @@ def main():
             f"{warning}"
         )
 
-    train_items, validation_items = split_paths(
+    (
+        train_items,
+        validation_items,
+        group_counts,
+    ) = split_paths(
         classes,
         paths_by_class,
         args.validation_fraction,
+        max(
+            1,
+            int(args.group_gap_ms),
+        ),
+    )
+
+    print()
+    print(
+        "Estimated independent temporal groups "
+        "(more groups = more real visual variety):"
+    )
+    for name in classes:
+        print(
+            f"  {name:<18} "
+            f"{group_counts[name]:>3} groups"
+        )
+
+    print()
+    print(
+        f"Grouped split: train={len(train_items)} "
+        f"validation={len(validation_items)} "
+        f"(gap={int(args.group_gap_ms)} ms)"
     )
 
     if len(train_items) < len(classes):
@@ -465,59 +649,82 @@ def main():
         def __init__(self, class_count):
             super().__init__()
 
+            def block(
+                in_channels,
+                out_channels,
+            ):
+                return nn.Sequential(
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=3,
+                        padding=1,
+                        bias=False,
+                    ),
+                    nn.BatchNorm2d(
+                        out_channels
+                    ),
+                    nn.SiLU(inplace=True),
+                    nn.Conv2d(
+                        out_channels,
+                        out_channels,
+                        kernel_size=3,
+                        padding=1,
+                        bias=False,
+                    ),
+                    nn.BatchNorm2d(
+                        out_channels
+                    ),
+                    nn.SiLU(inplace=True),
+                    nn.MaxPool2d(2),
+                )
+
             self.features = nn.Sequential(
-                nn.Conv2d(
-                    3,
-                    24,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.BatchNorm2d(24),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(2),
-
-                nn.Conv2d(
-                    24,
-                    48,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.BatchNorm2d(48),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(2),
-
-                nn.Conv2d(
-                    48,
-                    96,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.BatchNorm2d(96),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(2),
-
-                nn.Conv2d(
-                    96,
-                    128,
-                    kernel_size=3,
-                    padding=1,
-                ),
-                nn.BatchNorm2d(128),
-                nn.ReLU(inplace=True),
+                block(3, 32),
+                block(32, 64),
+                block(64, 128),
+                block(128, 192),
                 nn.AdaptiveAvgPool2d(
                     (1, 1)
                 ),
             )
 
-            self.classifier = nn.Linear(
-                128,
-                class_count,
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Dropout(0.20),
+                nn.Linear(
+                    192,
+                    class_count,
+                ),
             )
 
         def forward(self, x):
             x = self.features(x)
-            x = torch.flatten(x, 1)
             return self.classifier(x)
+
+    train_class_counts = [
+        0
+        for _ in classes
+    ]
+    for _, label in train_items:
+        train_class_counts[label] += 1
+
+    sample_weights = [
+        1.0
+        / max(
+            1,
+            train_class_counts[label],
+        )
+        for _, label in train_items
+    ]
+
+    train_sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(
+            train_items
+        ),
+        replacement=True,
+    )
 
     train_loader = DataLoader(
         IconDataset(
@@ -525,7 +732,8 @@ def main():
             training=True,
         ),
         batch_size=max(1, args.batch_size),
-        shuffle=True,
+        sampler=train_sampler,
+        shuffle=False,
         num_workers=0,
     )
 
@@ -552,10 +760,13 @@ def main():
         lr=0.0015,
         weight_decay=0.0005,
     )
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(
+        label_smoothing=0.05,
+    )
 
     best_state = None
     best_accuracy = -1.0
+    best_macro_accuracy = -1.0
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -586,11 +797,20 @@ def main():
         )
 
         validation_accuracy = -1.0
+        macro_accuracy = -1.0
 
         if validation_loader is not None:
             model.eval()
             correct = 0
             count = 0
+            class_correct = [
+                0
+                for _ in classes
+            ]
+            class_total = [
+                0
+                for _ in classes
+            ]
 
             with torch.no_grad():
                 for images, labels in validation_loader:
@@ -598,19 +818,75 @@ def main():
                         images
                     ).argmax(dim=1)
 
+                    correct_mask = (
+                        prediction == labels
+                    )
+
                     correct += int(
-                        (prediction == labels)
+                        correct_mask
                         .sum()
                         .item()
                     )
                     count += labels.numel()
 
+                    for class_index in range(
+                        len(classes)
+                    ):
+                        mask = (
+                            labels
+                            == class_index
+                        )
+                        class_total[
+                            class_index
+                        ] += int(
+                            mask.sum().item()
+                        )
+                        class_correct[
+                            class_index
+                        ] += int(
+                            (
+                                correct_mask
+                                & mask
+                            )
+                            .sum()
+                            .item()
+                        )
+
             validation_accuracy = (
                 correct / max(1, count)
             )
 
-            if validation_accuracy > best_accuracy:
-                best_accuracy = validation_accuracy
+            available_class_scores = [
+                class_correct[index]
+                / class_total[index]
+                for index in range(
+                    len(classes)
+                )
+                if class_total[index] > 0
+            ]
+            macro_accuracy = (
+                sum(
+                    available_class_scores
+                )
+                / len(
+                    available_class_scores
+                )
+                if available_class_scores
+                else -1.0
+            )
+
+            # Pick the checkpoint by macro accuracy so large classes cannot
+            # hide poor performance on less common heroes.
+            if (
+                macro_accuracy
+                > best_macro_accuracy
+            ):
+                best_macro_accuracy = (
+                    macro_accuracy
+                )
+                best_accuracy = (
+                    validation_accuracy
+                )
                 best_state = {
                     key: value.detach().clone()
                     for key, value
@@ -627,7 +903,9 @@ def main():
                     f"epoch {epoch:>3}/{args.epochs} "
                     f"loss={train_loss:.4f} "
                     f"val_acc="
-                    f"{validation_accuracy:.1%}"
+                    f"{validation_accuracy:.1%} "
+                    f"macro="
+                    f"{macro_accuracy:.1%}"
                 )
             else:
                 print(
@@ -639,6 +917,103 @@ def main():
         model.load_state_dict(best_state)
 
     model.eval()
+
+    # Detailed grouped validation report from the selected checkpoint.
+    if validation_loader is not None:
+        confusion = np.zeros(
+            (
+                len(classes),
+                len(classes),
+            ),
+            dtype=np.int64,
+        )
+
+        with torch.no_grad():
+            for images, labels in validation_loader:
+                predictions = model(
+                    images
+                ).argmax(dim=1)
+
+                for truth, prediction in zip(
+                    labels.tolist(),
+                    predictions.tolist(),
+                ):
+                    confusion[
+                        int(truth),
+                        int(prediction),
+                    ] += 1
+
+        print()
+        print(
+            "Per-hero grouped validation:"
+        )
+
+        for class_index, name in enumerate(
+            classes
+        ):
+            total = int(
+                confusion[
+                    class_index
+                ].sum()
+            )
+
+            if total <= 0:
+                print(
+                    f"  {name:<18} "
+                    "no independent validation group"
+                )
+                continue
+
+            correct = int(
+                confusion[
+                    class_index,
+                    class_index,
+                ]
+            )
+            accuracy = (
+                correct / total
+            )
+
+            mistakes = []
+            for other_index, count in enumerate(
+                confusion[class_index]
+            ):
+                if (
+                    other_index
+                    == class_index
+                    or count <= 0
+                ):
+                    continue
+
+                mistakes.append(
+                    (
+                        int(count),
+                        classes[
+                            other_index
+                        ],
+                    )
+                )
+
+            mistakes.sort(
+                reverse=True
+            )
+            confused_text = (
+                ", ".join(
+                    f"{other} x{count}"
+                    for count, other
+                    in mistakes[:3]
+                )
+                if mistakes
+                else "-"
+            )
+
+            print(
+                f"  {name:<18} "
+                f"{correct:>3}/{total:<3} "
+                f"{accuracy:>6.1%} | "
+                f"confused: "
+                f"{confused_text}"
+            )
 
     args.model.parent.mkdir(
         parents=True,
@@ -678,8 +1053,12 @@ def main():
 
     if best_accuracy >= 0:
         print(
-            "Best held-out accuracy: "
+            "Best grouped held-out accuracy: "
             f"{best_accuracy:.1%}"
+        )
+        print(
+            "Best grouped macro accuracy: "
+            f"{best_macro_accuracy:.1%}"
         )
 
     print()
