@@ -242,11 +242,12 @@ tracking:
   dedupe_similarity: 0.94
 
 event_dedupe:
-  # Final duplicate guard after parsing. Identity alone is NOT considered a
-  # duplicate because two legitimate eliminations can involve the same heroes
-  # or players within the window. The visible row must also closely match.
+  # Final duplicate guard after parsing. Once both hero identities are known,
+  # the same killer->victim hero pair is announced only once inside this short
+  # window, even if row animation causes the tracker to recreate it with a new
+  # track ID. Visual similarity is only the fallback when hero identity is
+  # incomplete.
   window_seconds: 5.0
-  identity_visual_similarity: 0.90
   visual_similarity: 0.96
 
 audio:
