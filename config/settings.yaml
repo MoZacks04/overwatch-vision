@@ -221,14 +221,14 @@ tracking:
 
   # If an animated/fading row temporarily loses its track and is recreated,
   # suppress the second emission for a short period.
-  dedupe_seconds: 8.0
+  dedupe_seconds: 5.0
   dedupe_similarity: 0.86
 
 event_dedupe:
   # Final duplicate guard after names/heroes are parsed. Same player pair or
   # hero pair will only be announced once inside this window. If identity is
   # still unknown, the row's visual fingerprint is used as a fallback.
-  window_seconds: 10.0
+  window_seconds: 5.0
   visual_similarity: 0.86
 
 audio:
@@ -242,7 +242,12 @@ audio:
   # Only announce an elimination once both hero identities are resolved.
   # Unknown team-only calls stay visible in the terminal but are not spoken.
   require_both_heroes: true
+
+  # Rows already visible during startup are treated as baseline state, not
+  # fresh eliminations. Parsed events older than this limit also stay silent
+  # so a temporary parser/audio backlog cannot read old feed entries later.
   suppress_first_seconds: 2.0
+  max_announcement_age_seconds: 5.0
 
 debug:
   enabled: true
