@@ -170,19 +170,30 @@ class TrainedHeroClassifier:
 
         return tensor
 
-    def predict_raw(
+    def predict_details(
         self,
         image: np.ndarray,
-    ) -> tuple[str | None, float, float]:
+    ) -> tuple[
+        str | None,
+        float,
+        str | None,
+        float,
+        float,
+    ]:
         """
-        Return the CNN's best class even when it is below the single-frame
-        acceptance threshold. Temporal consensus can use these softer votes
-        across several snapshots of the same kill-feed row.
+        Return top-1/top-2 details without applying acceptance thresholds.
+        Used by temporal consensus and the hard-example collector.
         """
         tensor = self._prepare(image)
 
         if tensor is None:
-            return None, 0.0, 0.0
+            return (
+                None,
+                0.0,
+                None,
+                0.0,
+                0.0,
+            )
 
         with self._torch.no_grad():
             logits = self._model(tensor)
@@ -196,18 +207,67 @@ class TrainedHeroClassifier:
             k=min(2, probabilities.numel()),
         )
 
-        best_score = float(values[0].item())
-        best_index = int(indices[0].item())
-        best_name = self._labels[best_index]
-
-        second_score = (
-            float(values[1].item())
-            if len(values) > 1
-            else 0.0
+        best_score = float(
+            values[0].item()
         )
-        margin = best_score - second_score
+        best_index = int(
+            indices[0].item()
+        )
+        best_name = self._labels[
+            best_index
+        ]
 
-        return best_name, best_score, margin
+        if len(values) > 1:
+            second_score = float(
+                values[1].item()
+            )
+            second_index = int(
+                indices[1].item()
+            )
+            second_name = self._labels[
+                second_index
+            ]
+        else:
+            second_score = 0.0
+            second_name = None
+
+        margin = (
+            best_score
+            - second_score
+        )
+
+        return (
+            best_name,
+            best_score,
+            second_name,
+            second_score,
+            margin,
+        )
+
+    def predict_raw(
+        self,
+        image: np.ndarray,
+    ) -> tuple[str | None, float, float]:
+        """
+        Return the CNN's best class even when it is below the single-frame
+        acceptance threshold. Temporal consensus can use these softer votes
+        across several snapshots of the same kill-feed row.
+        """
+        (
+            best_name,
+            best_score,
+            _second_name,
+            _second_score,
+            margin,
+        ) = self.predict_details(
+            image
+        )
+
+        return (
+            best_name,
+            best_score,
+            margin,
+        )
 
     def recognize(
         self,
