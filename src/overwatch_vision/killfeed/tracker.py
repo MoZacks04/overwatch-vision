@@ -26,6 +26,16 @@ class KillFeedTracker:
         self.match_threshold = float(
             cfg["fingerprint_match_threshold"]
         )
+        # Once a track has already emitted an event, be much stricter about
+        # attaching a newly visible row to it. Without this gate, a fresh
+        # elimination entering the same vertical slot as an old row can inherit
+        # the old track's emitted=True state and never produce an announcement.
+        self.emitted_match_visual_threshold = float(
+            cfg.get(
+                "emitted_match_visual_threshold",
+                0.84,
+            )
+        )
 
         # A row can briefly fade/animate enough to lose its original track
         # and then be recreated as a new track. Keep a short visual history
@@ -117,6 +127,24 @@ class KillFeedTracker:
 
         for ti, track in enumerate(self.tracks):
             for ri, row in enumerate(rows):
+                visual = fingerprint_similarity(
+                    track.row.fingerprint,
+                    row.fingerprint,
+                )
+
+                # The ordinary matcher deliberately allows some visual drift so
+                # animated/fading rows keep their track. That is too permissive
+                # after an event has already been emitted: a different kill can
+                # enter at the same Y position and otherwise look structurally
+                # similar. Require a strong raw appearance match before an
+                # emitted track is allowed to absorb the new row.
+                if (
+                    track.emitted
+                    and visual
+                    < self.emitted_match_visual_threshold
+                ):
+                    continue
+
                 score = self._match_score(
                     track.row,
                     row,
