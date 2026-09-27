@@ -180,13 +180,15 @@ The project now supports a staged path away from generic color/portrait guessing
 2. Each confirmed row produces exact killer/victim portrait crops.
 3. `label_hero_samples.py` turns those real in-game crops into labeled hero
    examples under `.cache/killfeed_hero_templates/`.
-4. `train_hero_classifier.py` trains a tiny 64x64 CNN on those exact kill-feed
-   portraits and exports a TorchScript model under `models/`.
+4. `train_hero_classifier.py` trains the kill-feed-specific classifier at
+   96x96, keeps nearby gameplay frames together during validation, balances
+   classes during training, and exports a TorchScript model under `models/`.
 5. At runtime, the trained classifier is preferred. If it is uncertain or no
    model exists yet, the conservative template/generic recognizer remains as a
    fallback.
-6. Hero identity still requires multi-frame consensus before a spoken call, and
-   parsed events still pass through the 10-second semantic duplicate guard.
+6. Hero identity still requires multi-frame consensus before a spoken call.
+   Tracking, parsed-event dedupe, kill-feed lifetime, and victim respawn state
+   provide additional protection against duplicate announcements.
 
 ### Labeling and training the row verifier
 
@@ -253,17 +255,53 @@ produces false positives.
 
 ### Training hero identity
 
-After normal play has produced samples under `debug_frames/hero_samples/`:
+The current permanent identity dataset lives under:
 
-```powershell
-.\.venv\Scripts\python.exe .\label_hero_samples.py
+```text
+datasets/killfeed_hero_identity/
 ```
 
-Label clean hero portraits, then train:
+Train or retrain it with:
 
 ```powershell
 .\.venv\Scripts\python.exe .\train_hero_classifier.py
 ```
 
-Restart Overwatch Vision after training. If the model files exist, the runtime
+The trainer uses grouped validation so nearby frames from the same gameplay
+moment do not leak across train and validation splits. It also prints per-hero
+accuracy and common confusions.
+
+### Automatic live hard-example mining
+
+Normal play now automatically mines difficult runtime portrait crops when the
+classifier has low confidence, a small top-1/top-2 margin, or unresolved
+multi-frame consensus. A sparse sample of confident predictions is also kept
+so confidently-wrong cases can be found.
+
+Pending review items are stored locally under:
+
+```text
+datasets/killfeed_hard_examples/pending_identity/
+```
+
+After playing, review them with:
+
+```powershell
+.\.venv\Scripts\python.exe .\review_hero_hard_examples.py
+```
+
+Reviewer controls:
+- type the correct hero name + `Enter` = add it to the permanent identity dataset
+- `Tab` = accept the model's displayed top guess
+- `Space` = defer the sample
+- `[` = mark the portrait box as bad and move it to localizer failures
+- `X` = discard an unusable sample
+- `Esc` = quit
+
+Accepted samples are added directly to `datasets/killfeed_hero_identity/`, so
+future retraining uses the original labeled data plus these real runtime
+failures. The review screen shows both the full row and the exact runtime crop
+that confused the classifier.
+
+Restart Overwatch Vision after retraining. If the model files exist, the runtime
 loads them automatically.
