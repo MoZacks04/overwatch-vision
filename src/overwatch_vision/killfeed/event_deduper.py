@@ -19,13 +19,13 @@ class ParsedEventDeduper:
     """
     Final duplicate guard after OCR/hero parsing.
 
-    Identity is preferred over raw track IDs:
-      1. killer player -> victim player
-      2. killer hero -> victim hero
-      3. visual row fingerprint when identity is unavailable
+    Parsed identity helps confirm a duplicate, but identity alone is never
+    enough: legitimate eliminations can repeat the same hero/player pair.
+    The visible row fingerprint must also closely match within the time window.
 
     This catches the common case where one visible kill-feed row is lost by
-    temporal tracking and recreated as a second track a few seconds later.
+    temporal tracking and recreated as a second track a few seconds later
+    without suppressing a different row that happens to involve the same hero.
     """
 
     def __init__(self, config: dict):
@@ -35,7 +35,13 @@ class ParsedEventDeduper:
             cfg.get("window_seconds", 10.0)
         )
         self.visual_similarity = float(
-            cfg.get("visual_similarity", 0.86)
+            cfg.get("visual_similarity", 0.96)
+        )
+        self.identity_visual_similarity = float(
+            cfg.get(
+                "identity_visual_similarity",
+                0.90,
+            )
         )
 
         self.recent: list[RecentParsedEvent] = []
@@ -96,32 +102,43 @@ class ParsedEventDeduper:
         )
 
         for item in self.recent:
-            # Strongest possible signal: same parsed player pair or hero pair.
-            if (
-                identity_key is not None
-                and item.identity_key is not None
-                and identity_key == item.identity_key
-            ):
-                return True
+            similarity = None
 
-            # Only use the visual fallback when at least one of the events
-            # lacks a strong parsed identity. This avoids suppressing two
-            # different well-identified eliminations that just look similar.
             if (
                 fingerprint is not None
                 and item.fingerprint is not None
-                and (
-                    identity_key is None
-                    or item.identity_key is None
-                )
             ):
                 similarity = fingerprint_similarity(
                     item.fingerprint,
                     fingerprint,
                 )
 
-                if similarity >= self.visual_similarity:
-                    return True
+            # Identity alone is NOT enough to call something a duplicate.
+            # Two legitimate eliminations can involve the same heroes/players
+            # within five seconds. Require the row pixels to agree as well.
+            if (
+                identity_key is not None
+                and item.identity_key is not None
+                and identity_key == item.identity_key
+                and similarity is not None
+                and similarity
+                >= self.identity_visual_similarity
+            ):
+                return True
+
+            # With incomplete OCR/hero identity, only suppress an almost
+            # identical visual row. This is intentionally strict so a fresh
+            # kill entering as another exits is not discarded.
+            if (
+                (
+                    identity_key is None
+                    or item.identity_key is None
+                )
+                and similarity is not None
+                and similarity
+                >= self.visual_similarity
+            ):
+                return True
 
         self.recent.append(
             RecentParsedEvent(
