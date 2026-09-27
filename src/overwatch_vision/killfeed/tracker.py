@@ -29,6 +29,21 @@ class KillFeedTracker:
             ),
         )
         self.expire_after = int(cfg["missing_frames_before_expire"])
+        self.max_visible_seconds = max(
+            0.0,
+            float(
+                cfg.get(
+                    "max_visible_seconds",
+                    8.5,
+                )
+            ),
+        )
+        self.hero_pair_mismatch_threshold = float(
+            cfg.get(
+                "hero_pair_mismatch_threshold",
+                0.78,
+            )
+        )
         self.max_vertical_shift_fraction = float(
             cfg["max_vertical_shift_fraction"]
         )
@@ -137,6 +152,20 @@ class KillFeedTracker:
     def update(self, rows, timestamp, roi_height):
         events = []
 
+        # Overwatch kill-feed rows only remain visible for about eight seconds.
+        # Once a track reaches that lifetime, it must not absorb a new row that
+        # appears in the same screen slot. Remove it before matching so the new
+        # entry is guaranteed to receive a fresh track ID.
+        if self.max_visible_seconds > 0:
+            self.tracks = [
+                track
+                for track in self.tracks
+                if (
+                    timestamp
+                    - track.first_seen
+                ) < self.max_visible_seconds
+            ]
+
         unmatched_row_indices = set(
             range(len(rows))
         )
@@ -153,6 +182,29 @@ class KillFeedTracker:
                     row.fingerprint,
                 )
 
+                hero_visual = None
+                if (
+                    track.row.hero_pair_fingerprint
+                    is not None
+                    and row.hero_pair_fingerprint
+                    is not None
+                ):
+                    hero_visual = fingerprint_similarity(
+                        track.row.hero_pair_fingerprint,
+                        row.hero_pair_fingerprint,
+                    )
+
+                    # The killer/victim portraits are event identity, not just
+                    # decoration. If both rows have reliable portrait pairs and
+                    # they disagree strongly, this is a different elimination
+                    # even when it occupies the exact same Y position and the
+                    # rest of the row looks similar.
+                    if (
+                        hero_visual
+                        < self.hero_pair_mismatch_threshold
+                    ):
+                        continue
+
                 score = self._match_score(
                     track.row,
                     row,
@@ -160,18 +212,11 @@ class KillFeedTracker:
                 )
 
                 if track.emitted:
-                    hero_visual = 0.0
-
-                    if (
-                        track.row.hero_pair_fingerprint
-                        is not None
-                        and row.hero_pair_fingerprint
-                        is not None
-                    ):
-                        hero_visual = fingerprint_similarity(
-                            track.row.hero_pair_fingerprint,
-                            row.hero_pair_fingerprint,
-                        )
+                    emitted_hero_visual = (
+                        hero_visual
+                        if hero_visual is not None
+                        else 0.0
+                    )
 
                     reference_height = max(
                         1.0,
@@ -194,7 +239,7 @@ class KillFeedTracker:
                         >= self.emitted_match_visual_threshold
                     )
                     hero_continuity_match = (
-                        hero_visual
+                        emitted_hero_visual
                         >= self.emitted_match_hero_threshold
                         and shift_rows
                         <= self.emitted_match_max_shift_rows
@@ -218,7 +263,7 @@ class KillFeedTracker:
                         )
                         score = max(
                             score,
-                            0.88 * hero_visual
+                            0.88 * emitted_hero_visual
                             + 0.12 * continuity,
                         )
 
