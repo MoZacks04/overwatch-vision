@@ -183,7 +183,7 @@ hero_classifier:
   enabled: true
   model_path: "models/killfeed_hero_classifier.pt"
   labels_path: "models/killfeed_hero_classifier_labels.json"
-  input_size: 64
+  input_size: 96
 
   # Include a little real row context around the detected icon. The trainer
   # rebuilds the same expanded crop from the saved row annotations, so no
