@@ -12,8 +12,9 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = (
     PROJECT_ROOT
-    / ".cache"
-    / "killfeed_hero_templates"
+    / "datasets"
+    / "killfeed_hero_identity"
+    / "by_class"
 )
 DEFAULT_MODEL = (
     PROJECT_ROOT
@@ -112,7 +113,7 @@ def discover_dataset(root: Path):
     if not root.exists():
         raise SystemExit(
             f"Dataset folder does not exist: {root}\n"
-            "Run label_hero_samples.py first."
+            "Run label_killfeed_hero_identities.py first."
         )
 
     for directory in sorted(root.iterdir()):
