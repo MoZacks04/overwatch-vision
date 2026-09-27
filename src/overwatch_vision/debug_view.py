@@ -227,95 +227,34 @@ class DebugView:
                 cv2.LINE_AA,
             )
 
+        # Clean runtime overlay: draw each confirmed kill-feed entry once,
+        # then draw the exact K/V portrait rectangles inside it. Raw HSV,
+        # localizer, verifier and candidate boxes remain available as counts
+        # in the monitor header but are intentionally not stacked visually.
         if self.show_details and self.cfg.get(
             "draw_rows",
             True,
         ):
-            for box in detector_debug.get(
-                "localizer_proposals",
-                [],
-            ):
-                x1 = roi_rect.x1 + box.x1
-                y1 = roi_rect.y1 + box.y1
-                x2 = roi_rect.x1 + box.x2
-                y2 = roi_rect.y1 + box.y2
+            for track in active_tracks:
+                if not track.confirmed:
+                    continue
 
-                cv2.rectangle(
-                    output,
-                    (x1, y1),
-                    (x2, y2),
-                    (255, 0, 255),
-                    1,
-                )
-
-            for rejected in detector_debug.get(
-                "verifier_rejections",
-                [],
-            ):
-                box = rejected["bbox_roi"]
-                probability = rejected.get("probability")
-
-                x1 = roi_rect.x1 + box.x1
-                y1 = roi_rect.y1 + box.y1
-                x2 = roi_rect.x1 + box.x2
-                y2 = roi_rect.y1 + box.y2
-
-                cv2.rectangle(
-                    output,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 80, 255),
-                    2,
-                )
-
-                label = (
-                    "REJECT"
-                    if probability is None
-                    else f"REJECT {probability:.2f}"
-                )
-                cv2.putText(
-                    output,
-                    label,
-                    (x1, max(18, y1 - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.44,
-                    (0, 80, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
-
-            for row in detector_debug["rows"]:
+                row = track.row
                 box = row.bbox_game
 
                 cv2.rectangle(
                     output,
                     (box.x1, box.y1),
                     (box.x2, box.y2),
-                    (0, 255, 0),
-                    3,
+                    (255, 255, 255),
+                    2,
                 )
 
                 self._draw_hero_boxes(
                     output,
                     row,
-                    row.bbox_game.x1,
-                    row.bbox_game.y1,
-                    thickness=2,
-                )
-
-        # A row detector only runs at ~10 Hz, while the preview runs at
-        # ~30 FPS. Draw K/V boxes from confirmed tracks as well so they do
-        # not disappear on the two frames between detector updates.
-        if self.show_details:
-            for track in active_tracks:
-                if not track.confirmed:
-                    continue
-
-                self._draw_hero_boxes(
-                    output,
-                    track.row,
-                    track.row.bbox_game.x1,
-                    track.row.bbox_game.y1,
+                    box.x1,
+                    box.y1,
                     thickness=2,
                 )
 
@@ -397,81 +336,38 @@ class DebugView:
                 dtype=np.uint8,
             )
 
+        # Keep the monitor visually simple: one box for each confirmed feed
+        # entry and one K/V box for each portrait. Intermediate detector boxes
+        # are represented by the counters in the header instead of overlays.
         if self.show_details and self.cfg.get(
             "draw_rows",
             True,
         ):
-            for box in detector_debug.get(
-                "localizer_proposals",
-                [],
-            ):
-                cv2.rectangle(
-                    output,
-                    (box.x1, box.y1),
-                    (box.x2, box.y2),
-                    (255, 0, 255),
-                    1,
-                )
-                cv2.putText(
-                    output,
-                    "localizer",
-                    (box.x1, max(18, box.y1 - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.40,
-                    (255, 0, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+            for track in active_tracks:
+                if not track.confirmed:
+                    continue
 
-            for rejected in detector_debug.get(
-                "verifier_rejections",
-                [],
-            ):
-                box = rejected["bbox_roi"]
-                probability = rejected.get("probability")
-
-                cv2.rectangle(
-                    output,
-                    (box.x1, box.y1),
-                    (box.x2, box.y2),
-                    (0, 80, 255),
-                    2,
-                )
-
-                label = (
-                    "reject"
-                    if probability is None
-                    else f"reject {probability:.2f}"
-                )
-                cv2.putText(
-                    output,
-                    label,
-                    (box.x1, max(18, box.y1 - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.43,
-                    (0, 80, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
-
-            for row in detector_debug["rows"]:
+                row = track.row
                 box = row.bbox_roi
 
                 cv2.rectangle(
                     output,
                     (box.x1, box.y1),
                     (box.x2, box.y2),
-                    (0, 255, 0),
+                    (255, 255, 255),
                     2,
                 )
 
                 cv2.putText(
                     output,
-                    f"candidate {row.score:.2f}",
-                    (box.x1, max(18, box.y1 - 4)),
+                    f"ID {track.track_id}",
+                    (
+                        max(0, box.x2 - 70),
+                        max(18, box.y2 - 4),
+                    ),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (0, 255, 0),
+                    0.42,
+                    (255, 255, 255),
                     1,
                     cv2.LINE_AA,
                 )
@@ -479,46 +375,10 @@ class DebugView:
                 self._draw_hero_boxes(
                     output,
                     row,
-                    row.bbox_roi.x1,
-                    row.bbox_roi.y1,
-                    thickness=1,
+                    box.x1,
+                    box.y1,
+                    thickness=2,
                 )
-
-        for track in active_tracks:
-            if not track.confirmed:
-                continue
-
-            box = track.row.bbox_roi
-
-            cv2.rectangle(
-                output,
-                (box.x1, box.y1),
-                (box.x2, box.y2),
-                (255, 255, 255),
-                1,
-            )
-
-            cv2.putText(
-                output,
-                f"ID {track.track_id}",
-                (
-                    max(0, box.x2 - 70),
-                    max(18, box.y2 - 4),
-                ),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
-
-            self._draw_hero_boxes(
-                output,
-                track.row,
-                track.row.bbox_roi.x1,
-                track.row.bbox_roi.y1,
-                thickness=1,
-            )
 
         proposal_count = len(
             detector_debug.get("proposals", [])
