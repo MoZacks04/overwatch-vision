@@ -14,6 +14,7 @@ from overwatch_vision.debug_view import DebugView
 from overwatch_vision.killfeed.async_parser import AsyncKillFeedParser
 from overwatch_vision.killfeed.detector import KillFeedDetector
 from overwatch_vision.killfeed.event_deduper import ParsedEventDeduper
+from overwatch_vision.killfeed.elimination_state import EliminationStateTracker
 from overwatch_vision.killfeed.parser import KillFeedParser
 from overwatch_vision.ocr import OCRReader
 from overwatch_vision.regions import HUDRegionManager
@@ -191,6 +192,9 @@ def main():
     parser_worker.start()
 
     event_deduper = ParsedEventDeduper(config)
+    elimination_state = EliminationStateTracker(
+        config
+    )
 
     # Team counts now use cheap digit templates, not EasyOCR.
     team_status_detector = TeamStatusDetector(config)
@@ -532,15 +536,37 @@ def main():
                         require_both_heroes=require_both_heroes,
                     )
 
+                respawn_remaining = (
+                    elimination_state.remaining_seconds(
+                        event,
+                        float(event.timestamp),
+                    )
+                    if speech
+                    else 0.0
+                )
+
                 if speech and stale_for_audio:
                     print(
                         "[audio] stale event not announced "
                         f"(age={event_age:.1f}s, "
                         f"limit={max_announcement_age_seconds:.1f}s)"
                     )
+                elif (
+                    speech
+                    and respawn_remaining > 0.0
+                ):
+                    print(
+                        "[respawn-guard] suppressed elimination for "
+                        f"{event.victim_hero or event.victim_name or 'victim'} "
+                        f"(dead for another {respawn_remaining:.1f}s)"
+                    )
                 elif speech:
                     print(
                         f"[audio] queued: {speech}"
+                    )
+                    elimination_state.record_elimination(
+                        event,
+                        float(event.timestamp),
                     )
                     debug.notify_event(speech)
                     audio.announce_elimination(speech)
@@ -611,12 +637,16 @@ def main():
             if key in (ord("r"), ord("R")):
                 killfeed.reset()
                 event_deduper.reset()
+                elimination_state.reset()
                 session_start = time.monotonic()
                 baseline_cutoff = (
                     session_start
                     + suppress_first_seconds
                 )
-                print("[killfeed] tracker + event dedupe reset")
+                print(
+                    "[killfeed] tracker + event dedupe + "
+                    "elimination state reset"
+                )
 
             elapsed = time.perf_counter() - loop_start
             remaining = target_dt - elapsed
