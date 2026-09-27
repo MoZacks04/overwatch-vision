@@ -170,14 +170,19 @@ class TrainedHeroClassifier:
 
         return tensor
 
-    def recognize(
+    def predict_raw(
         self,
         image: np.ndarray,
-    ) -> tuple[str | None, float]:
+    ) -> tuple[str | None, float, float]:
+        """
+        Return the CNN's best class even when it is below the single-frame
+        acceptance threshold. Temporal consensus can use these softer votes
+        across several snapshots of the same kill-feed row.
+        """
         tensor = self._prepare(image)
 
         if tensor is None:
-            return None, 0.0
+            return None, 0.0, 0.0
 
         with self._torch.no_grad():
             logits = self._model(tensor)
@@ -201,6 +206,19 @@ class TrainedHeroClassifier:
             else 0.0
         )
         margin = best_score - second_score
+
+        return best_name, best_score, margin
+
+    def recognize(
+        self,
+        image: np.ndarray,
+    ) -> tuple[str | None, float]:
+        best_name, best_score, margin = self.predict_raw(
+            image
+        )
+
+        if best_name is None:
+            return None, 0.0
 
         if (
             best_score < self.min_confidence
