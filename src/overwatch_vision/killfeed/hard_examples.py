@@ -105,6 +105,12 @@ class HeroHardExampleCollector:
         self._recent: list[RecentHardSample] = []
         self._candidate_counter = 0
 
+        if self.enabled:
+            print(
+                "[hard-examples] live hero mining enabled. "
+                "Review later with review_hero_hard_examples.py"
+            )
+
     def _ensure_dirs(self):
         self.pending_dir.mkdir(
             parents=True,
