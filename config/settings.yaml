@@ -255,6 +255,17 @@ event_dedupe:
   window_seconds: 5.0
   visual_similarity: 0.96
 
+elimination_state:
+  # Second-line duplicate guard for speech and future coaching state.
+  # Once a victim is announced dead, do not announce that same victim again
+  # until this window has elapsed. Game modes can have different respawn rules,
+  # so this is configurable and can later be replaced by direct respawn-state
+  # inference from the HUD.
+  enabled: true
+  default_respawn_seconds: 10.0
+  use_player_name: true
+  use_hero_fallback: true
+
 audio:
   enabled: true
   phrase: "Elimination detected"
